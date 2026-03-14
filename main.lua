@@ -29,21 +29,28 @@ local Config = {
     Aimbot = {
         Enabled = false,
         Key = Enum.UserInputType.MouseButton2,
+        KeyName = "RMB",
         Radius = 150,
         Smoothness = 0.5,
         ShowFOV = true,
         TargetPart = Hitboxes[HitboxIndex]
     },
-    SilentAim = { Enabled = false },
-    ESP        = { Enabled = false, TeamCheck = true },
-    Chams      = {
+    SilentAim     = { Enabled = false },
+    ESP           = { Enabled = false },
+    TeamCheck     = true,  -- skip teammates in ALL features
+    Chams         = {
         Enabled = false,
         FillColor    = ChamsColors[ChamsColorIndex].fill,
         OutlineColor = ChamsColors[ChamsColorIndex].outline,
     },
-    Fly        = { Enabled = false, Speed = 60 },
-    Noclip     = { Enabled = false },
-    TPAura     = { Enabled = false, Range = 20, Interval = 0.15 },
+    Fly           = { Enabled = false, Speed = 60 },
+    Noclip        = { Enabled = false },
+    TPAura        = { Enabled = false, Range = 20, Interval = 0.15 },
+    InfiniteJump  = { Enabled = false },
+    InfiniteAmmo  = { Enabled = false },
+    RapidFire     = { Enabled = false },
+    MagicBullet   = { Enabled = false },
+    EnemyTPAura   = { Enabled = false, Interval = 0.15 },
 }
 
 -- FOV Circle
@@ -65,7 +72,7 @@ local function GetClosestPlayer()
             or Player.Character:FindFirstChild("HumanoidRootPart")
         local hum = Player.Character:FindFirstChild("Humanoid")
         if not aimPart or not hum or hum.Health <= 0 then continue end
-        -- Team check only if teams are actually used in this game
+        -- Global team check
         if Config.TeamCheck then
             local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
             if ok and sameTeam then continue end
@@ -87,7 +94,8 @@ end
 --  SILENT AIM  (Universal - works in all games)
 -- ════════════════════════════════════════
 
--- Method 1: mousemoverel (works in Arsenal, Phantom Forces, etc.)
+-- Method 1: hold-snap silent aim (fires continuously while LMB held, no snap-back flicker)
+local silentAimConn
 local function ApplySilentAim()
     if not Config.SilentAim.Enabled then return end
     local target = GetClosestPlayer()
@@ -95,12 +103,10 @@ local function ApplySilentAim()
     local screenPos, onScreen = Camera:WorldToScreenPoint(target.Position)
     if not onScreen then return end
     local mouse = UserInputService:GetMouseLocation()
-    local dx = screenPos.X - mouse.X
-    local dy = screenPos.Y - mouse.Y
+    -- clamp movement so it doesn't teleport wildly
+    local dx = math.clamp(screenPos.X - mouse.X, -400, 400)
+    local dy = math.clamp(screenPos.Y - mouse.Y, -400, 400)
     mousemoverel(dx, dy)
-    task.defer(function()
-        mousemoverel(-dx, -dy)
-    end)
 end
 
 -- Method 2: namecall hook covering ALL ray methods used by Roblox games
@@ -145,6 +151,42 @@ pcall(function()
         end
 
         return oldNamecall(self, ...)
+    end)
+
+    setreadonly(mt, true)
+end)
+
+-- Magic Bullet: hook FireServer to redirect CFrame/Vector3 hit args to enemy
+pcall(function()
+    local mt = getrawmetatable(game)
+    local oldNamecall = mt.__namecall
+    setreadonly(mt, false)
+
+    local existing = mt.__namecall
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if Config.MagicBullet.Enabled and method == "FireServer" then
+            local target = GetClosestPlayer()
+            if target then
+                local args = {...}
+                local modified = false
+                for i, v in ipairs(args) do
+                    -- Redirect any CFrame argument pointing somewhere
+                    if typeof(v) == "CFrame" then
+                        args[i] = CFrame.new(target.Position)
+                        modified = true
+                    -- Redirect any Vector3 that looks like a world position (not zero)
+                    elseif typeof(v) == "Vector3" and v.Magnitude > 1 then
+                        args[i] = target.Position
+                        modified = true
+                    end
+                end
+                if modified then
+                    return existing(self, table.unpack(args))
+                end
+            end
+        end
+        return existing(self, ...)
     end)
 
     setreadonly(mt, true)
@@ -214,7 +256,15 @@ RunService.RenderStepped:Connect(function()
     FOVCircle.Position = UserInputService:GetMouseLocation()
 
     -- Camera Aimbot
-    if Config.Aimbot.Enabled and UserInputService:IsMouseButtonPressed(Config.Aimbot.Key) then
+    local aimbotActive = false
+    if Config.Aimbot.Key and typeof(Config.Aimbot.Key) == "EnumItem" then
+        if Config.Aimbot.Key.EnumType == Enum.UserInputType then
+            aimbotActive = UserInputService:IsMouseButtonPressed(Config.Aimbot.Key)
+        elseif Config.Aimbot.Key.EnumType == Enum.KeyCode then
+            aimbotActive = UserInputService:IsKeyDown(Config.Aimbot.Key)
+        end
+    end
+    if Config.Aimbot.Enabled and aimbotActive then
         local Target = GetClosestPlayer()
         if Target then
             local CurrentCF = Camera.CFrame
@@ -223,7 +273,7 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Silent Aim: apply on left click
+    -- Silent Aim: continuously snap while LMB held
     if Config.SilentAim.Enabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
         ApplySilentAim()
     end
@@ -337,6 +387,97 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ════════════════════════════════════════
+--  ENEMY TP AURA (pull enemies to you)
+-- ════════════════════════════════════════
+local lastEnemyTP = 0
+RunService.Heartbeat:Connect(function()
+    if not Config.EnemyTPAura.Enabled then return end
+    if (tick() - lastEnemyTP) < Config.EnemyTPAura.Interval then return end
+    lastEnemyTP = tick()
+
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player == LocalPlayer or not Player.Character then continue end
+        local enemyRoot = Player.Character:FindFirstChild("HumanoidRootPart")
+        local hum = Player.Character:FindFirstChild("Humanoid")
+        if not enemyRoot or not hum or hum.Health <= 0 then continue end
+        -- Team check
+        if Config.TeamCheck then
+            local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
+            if ok and sameTeam then continue end
+        end
+        pcall(function()
+            enemyRoot.CFrame = Root.CFrame * CFrame.new(0, 0, -2)
+        end)
+    end
+end)
+
+-- ════════════════════════════════════════
+--  INFINITE JUMP
+-- ════════════════════════════════════════
+UserInputService.JumpRequest:Connect(function()
+    if not Config.InfiniteJump.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local hum = Char:FindFirstChild("Humanoid")
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+-- ════════════════════════════════════════
+--  INFINITE AMMO + RAPID FIRE
+-- ════════════════════════════════════════
+local function PatchTool(tool)
+    for _, v in ipairs(tool:GetDescendants()) do
+        -- Infinite Ammo: keep any ammo/magazine value maxed
+        if (v:IsA("IntValue") or v:IsA("NumberValue")) and
+           string.lower(v.Name):find("ammo") or string.lower(v.Name):find("mag") then
+            v.Changed:Connect(function()
+                if Config.InfiniteAmmo.Enabled and v.Value < v.MaxValue then
+                    pcall(function() v.Value = v.MaxValue end)
+                end
+            end)
+        end
+        -- Rapid Fire: set fire-rate delay to near zero
+        if v:IsA("NumberValue") and
+           (string.lower(v.Name):find("firerate") or string.lower(v.Name):find("delay") or string.lower(v.Name):find("cooldown")) then
+            if Config.RapidFire.Enabled then
+                pcall(function() v.Value = 0.01 end)
+            end
+        end
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    if not (Config.InfiniteAmmo.Enabled or Config.RapidFire.Enabled) then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local tool = Char:FindFirstChildWhichIsA("Tool")
+        or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
+    if not tool then return end
+    -- Brute-force ammo values
+    for _, v in ipairs(tool:GetDescendants()) do
+        if Config.InfiniteAmmo.Enabled and (v:IsA("IntValue") or v:IsA("NumberValue")) then
+            local n = string.lower(v.Name)
+            if n:find("ammo") or n:find("mag") or n:find("clip") then
+                pcall(function()
+                    if v.Value < 999 then v.Value = 999 end
+                end)
+            end
+        end
+        if Config.RapidFire.Enabled and v:IsA("NumberValue") then
+            local n = string.lower(v.Name)
+            if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
+                pcall(function() v.Value = 0.01 end)
+            end
+        end
+    end
+end)
+
+-- ════════════════════════════════════════
 --  GUI
 -- ════════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
@@ -353,7 +494,7 @@ ScreenGui.ResetOnSpawn = false
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.Position = UDim2.new(0.5, -115, 0.5, -145)
-MainFrame.Size = UDim2.new(0, 230, 0, 490)
+MainFrame.Size = UDim2.new(0, 230, 0, 930)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -431,6 +572,171 @@ local FlyToggle    = MakeButton("Fly [OFF]",      320)
 local NoclipToggle = MakeButton("Noclip [OFF]",   362)
 local TPAuraToggle = MakeButton("TP Aura [OFF]",  404)
 
+-- Misc separator
+local Sep3 = Instance.new("Frame")
+Sep3.Parent = MainFrame
+Sep3.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
+Sep3.BorderSizePixel = 0
+Sep3.Position = UDim2.new(0.05, 0, 0, 447)
+Sep3.Size = UDim2.new(0.9, 0, 0, 1)
+
+local InfJumpToggle   = MakeButton("Inf. Jump [OFF]",   453)
+local InfAmmoToggle   = MakeButton("Inf. Ammo [OFF]",   495)
+local RapidFireToggle = MakeButton("Rapid Fire [OFF]",  537)
+local MagicBulletToggle  = MakeButton("Magic Bullet [OFF]",  579)
+local EnemyTPToggle      = MakeButton("Enemy TP Aura [OFF]", 621)
+local TeamCheckToggle    = MakeButton("Team Check [ON]",      663, Color3.fromRGB(50, 255, 100))
+
+-- FOV row: label + minus + plus
+local FOVLabel = Instance.new("TextLabel")
+FOVLabel.Parent = MainFrame
+FOVLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+FOVLabel.Position = UDim2.new(0.05, 0, 0, 707)
+FOVLabel.Size = UDim2.new(0.48, 0, 0, 34)
+FOVLabel.Font = Enum.Font.GothamMedium
+FOVLabel.Text = "FOV: 150"
+FOVLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+FOVLabel.TextSize = 13
+FOVLabel.BorderSizePixel = 0
+UICorner:Clone().Parent = FOVLabel
+
+local FOVMinus = Instance.new("TextButton")
+FOVMinus.Parent = MainFrame
+FOVMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+FOVMinus.Position = UDim2.new(0.56, 0, 0, 707)
+FOVMinus.Size = UDim2.new(0.18, 0, 0, 34)
+FOVMinus.Font = Enum.Font.GothamBold
+FOVMinus.Text = "–"
+FOVMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
+FOVMinus.TextSize = 18
+FOVMinus.BorderSizePixel = 0
+UICorner:Clone().Parent = FOVMinus
+
+local FOVPlus = Instance.new("TextButton")
+FOVPlus.Parent = MainFrame
+FOVPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+FOVPlus.Position = UDim2.new(0.77, 0, 0, 707)
+FOVPlus.Size = UDim2.new(0.18, 0, 0, 34)
+FOVPlus.Font = Enum.Font.GothamBold
+FOVPlus.Text = "+"
+FOVPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
+FOVPlus.TextSize = 18
+FOVPlus.BorderSizePixel = 0
+UICorner:Clone().Parent = FOVPlus
+
+-- Smooth row
+local SmoothLabel = Instance.new("TextLabel")
+SmoothLabel.Parent = MainFrame
+SmoothLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+SmoothLabel.Position = UDim2.new(0.05, 0, 0, 749)
+SmoothLabel.Size = UDim2.new(0.48, 0, 0, 34)
+SmoothLabel.Font = Enum.Font.GothamMedium
+SmoothLabel.Text = "Smooth: 0.5"
+SmoothLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SmoothLabel.TextSize = 13
+SmoothLabel.BorderSizePixel = 0
+UICorner:Clone().Parent = SmoothLabel
+
+local SmoothMinus = Instance.new("TextButton")
+SmoothMinus.Parent = MainFrame
+SmoothMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SmoothMinus.Position = UDim2.new(0.56, 0, 0, 749)
+SmoothMinus.Size = UDim2.new(0.18, 0, 0, 34)
+SmoothMinus.Font = Enum.Font.GothamBold
+SmoothMinus.Text = "–"
+SmoothMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
+SmoothMinus.TextSize = 18
+SmoothMinus.BorderSizePixel = 0
+UICorner:Clone().Parent = SmoothMinus
+
+local SmoothPlus = Instance.new("TextButton")
+SmoothPlus.Parent = MainFrame
+SmoothPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SmoothPlus.Position = UDim2.new(0.77, 0, 0, 749)
+SmoothPlus.Size = UDim2.new(0.18, 0, 0, 34)
+SmoothPlus.Font = Enum.Font.GothamBold
+SmoothPlus.Text = "+"
+SmoothPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
+SmoothPlus.TextSize = 18
+SmoothPlus.BorderSizePixel = 0
+UICorner:Clone().Parent = SmoothPlus
+
+-- Speed row
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Parent = MainFrame
+SpeedLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+SpeedLabel.Position = UDim2.new(0.05, 0, 0, 791)
+SpeedLabel.Size = UDim2.new(0.48, 0, 0, 34)
+SpeedLabel.Font = Enum.Font.GothamMedium
+SpeedLabel.Text = "Speed: 16"
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpeedLabel.TextSize = 13
+SpeedLabel.BorderSizePixel = 0
+UICorner:Clone().Parent = SpeedLabel
+
+local SpeedMinus = Instance.new("TextButton")
+SpeedMinus.Parent = MainFrame
+SpeedMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SpeedMinus.Position = UDim2.new(0.56, 0, 0, 791)
+SpeedMinus.Size = UDim2.new(0.18, 0, 0, 34)
+SpeedMinus.Font = Enum.Font.GothamBold
+SpeedMinus.Text = "–"
+SpeedMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
+SpeedMinus.TextSize = 18
+SpeedMinus.BorderSizePixel = 0
+UICorner:Clone().Parent = SpeedMinus
+
+local SpeedPlus = Instance.new("TextButton")
+SpeedPlus.Parent = MainFrame
+SpeedPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+SpeedPlus.Position = UDim2.new(0.77, 0, 0, 791)
+SpeedPlus.Size = UDim2.new(0.18, 0, 0, 34)
+SpeedPlus.Font = Enum.Font.GothamBold
+SpeedPlus.Text = "+"
+SpeedPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
+SpeedPlus.TextSize = 18
+SpeedPlus.BorderSizePixel = 0
+UICorner:Clone().Parent = SpeedPlus
+
+-- Fly Speed row
+local FlySpeedLabel = Instance.new("TextLabel")
+FlySpeedLabel.Parent = MainFrame
+FlySpeedLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+FlySpeedLabel.Position = UDim2.new(0.05, 0, 0, 833)
+FlySpeedLabel.Size = UDim2.new(0.48, 0, 0, 34)
+FlySpeedLabel.Font = Enum.Font.GothamMedium
+FlySpeedLabel.Text = "Fly Spd: 60"
+FlySpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+FlySpeedLabel.TextSize = 13
+FlySpeedLabel.BorderSizePixel = 0
+UICorner:Clone().Parent = FlySpeedLabel
+
+local FlySpeedMinus = Instance.new("TextButton")
+FlySpeedMinus.Parent = MainFrame
+FlySpeedMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+FlySpeedMinus.Position = UDim2.new(0.56, 0, 0, 833)
+FlySpeedMinus.Size = UDim2.new(0.18, 0, 0, 34)
+FlySpeedMinus.Font = Enum.Font.GothamBold
+FlySpeedMinus.Text = "–"
+FlySpeedMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
+FlySpeedMinus.TextSize = 18
+FlySpeedMinus.BorderSizePixel = 0
+UICorner:Clone().Parent = FlySpeedMinus
+
+local FlySpeedPlus = Instance.new("TextButton")
+FlySpeedPlus.Parent = MainFrame
+FlySpeedPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+FlySpeedPlus.Position = UDim2.new(0.77, 0, 0, 833)
+FlySpeedPlus.Size = UDim2.new(0.18, 0, 0, 34)
+FlySpeedPlus.Font = Enum.Font.GothamBold
+FlySpeedPlus.Text = "+"
+FlySpeedPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
+FlySpeedPlus.TextSize = 18
+FlySpeedPlus.BorderSizePixel = 0
+UICorner:Clone().Parent = FlySpeedPlus
+
+local AimbotKeyBtn = MakeButton("Aim Key: RMB", 879, Color3.fromRGB(255, 200, 50))
+
 -- Aimbot
 AimbotToggle.MouseButton1Click:Connect(function()
     Config.Aimbot.Enabled = not Config.Aimbot.Enabled
@@ -503,10 +809,143 @@ TPAuraToggle.MouseButton1Click:Connect(function()
     AnimateButton(TPAuraToggle, Config.TPAura.Enabled)
 end)
 
--- Insert key to toggle menu
+-- Infinite Jump
+InfJumpToggle.MouseButton1Click:Connect(function()
+    Config.InfiniteJump.Enabled = not Config.InfiniteJump.Enabled
+    InfJumpToggle.Text = "Inf. Jump [" .. (Config.InfiniteJump.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(InfJumpToggle, Config.InfiniteJump.Enabled)
+end)
+
+-- Infinite Ammo
+InfAmmoToggle.MouseButton1Click:Connect(function()
+    Config.InfiniteAmmo.Enabled = not Config.InfiniteAmmo.Enabled
+    InfAmmoToggle.Text = "Inf. Ammo [" .. (Config.InfiniteAmmo.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(InfAmmoToggle, Config.InfiniteAmmo.Enabled)
+end)
+
+-- Rapid Fire
+RapidFireToggle.MouseButton1Click:Connect(function()
+    Config.RapidFire.Enabled = not Config.RapidFire.Enabled
+    RapidFireToggle.Text = "Rapid Fire [" .. (Config.RapidFire.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(RapidFireToggle, Config.RapidFire.Enabled)
+end)
+
+-- Magic Bullet
+MagicBulletToggle.MouseButton1Click:Connect(function()
+    Config.MagicBullet.Enabled = not Config.MagicBullet.Enabled
+    MagicBulletToggle.Text = "Magic Bullet [" .. (Config.MagicBullet.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(MagicBulletToggle, Config.MagicBullet.Enabled)
+end)
+
+-- Enemy TP Aura
+EnemyTPToggle.MouseButton1Click:Connect(function()
+    Config.EnemyTPAura.Enabled = not Config.EnemyTPAura.Enabled
+    EnemyTPToggle.Text = "Enemy TP Aura [" .. (Config.EnemyTPAura.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(EnemyTPToggle, Config.EnemyTPAura.Enabled)
+end)
+
+-- Team Check
+TeamCheckToggle.MouseButton1Click:Connect(function()
+    Config.TeamCheck = not Config.TeamCheck
+    TeamCheckToggle.Text = "Team Check [" .. (Config.TeamCheck and "ON" or "OFF") .. "]"
+    local col = Config.TeamCheck and Color3.fromRGB(50,200,80) or Color3.fromRGB(200,50,50)
+    TweenService:Create(TeamCheckToggle, TweenInfo.new(0.25), {BackgroundColor3 = col}):Play()
+end)
+-- Start green (ON by default)
+TweenService:Create(TeamCheckToggle, TweenInfo.new(0), {BackgroundColor3 = Color3.fromRGB(50,200,80)}):Play()
+
+-- FOV controls
+FOVMinus.MouseButton1Click:Connect(function()
+    Config.Aimbot.Radius = math.max(10, Config.Aimbot.Radius - 10)
+    FOVLabel.Text = "FOV: " .. Config.Aimbot.Radius
+end)
+
+FOVPlus.MouseButton1Click:Connect(function()
+    Config.Aimbot.Radius = math.min(500, Config.Aimbot.Radius + 10)
+    FOVLabel.Text = "FOV: " .. Config.Aimbot.Radius
+end)
+
+-- Smooth controls
+SmoothMinus.MouseButton1Click:Connect(function()
+    Config.Aimbot.Smoothness = math.max(0.05, math.floor((Config.Aimbot.Smoothness - 0.05) * 100 + 0.5) / 100)
+    SmoothLabel.Text = "Smooth: " .. Config.Aimbot.Smoothness
+end)
+
+SmoothPlus.MouseButton1Click:Connect(function()
+    Config.Aimbot.Smoothness = math.min(1.0, math.floor((Config.Aimbot.Smoothness + 0.05) * 100 + 0.5) / 100)
+    SmoothLabel.Text = "Smooth: " .. Config.Aimbot.Smoothness
+end)
+
+-- Speed controls
+local currentSpeed = 16
+SpeedMinus.MouseButton1Click:Connect(function()
+    currentSpeed = math.max(2, currentSpeed - 2)
+    SpeedLabel.Text = "Speed: " .. currentSpeed
+    local Char = LocalPlayer.Character
+    if Char and Char:FindFirstChild("Humanoid") then
+        Char.Humanoid.WalkSpeed = currentSpeed
+    end
+end)
+
+SpeedPlus.MouseButton1Click:Connect(function()
+    currentSpeed = math.min(200, currentSpeed + 2)
+    SpeedLabel.Text = "Speed: " .. currentSpeed
+    local Char = LocalPlayer.Character
+    if Char and Char:FindFirstChild("Humanoid") then
+        Char.Humanoid.WalkSpeed = currentSpeed
+    end
+end)
+
+-- Ensure WalkSpeed stays when respawning or state changes
+RunService.Heartbeat:Connect(function()
+    local Char = LocalPlayer.Character
+    if Char and Char:FindFirstChild("Humanoid") then
+        if Char.Humanoid.WalkSpeed ~= currentSpeed and currentSpeed ~= 16 then
+            Char.Humanoid.WalkSpeed = currentSpeed
+        end
+    end
+end)
+
+-- Fly Speed controls
+FlySpeedMinus.MouseButton1Click:Connect(function()
+    Config.Fly.Speed = math.max(10, Config.Fly.Speed - 10)
+    FlySpeedLabel.Text = "Fly Spd: " .. Config.Fly.Speed
+end)
+
+FlySpeedPlus.MouseButton1Click:Connect(function()
+    Config.Fly.Speed = math.min(300, Config.Fly.Speed + 10)
+    FlySpeedLabel.Text = "Fly Spd: " .. Config.Fly.Speed
+end)
+
+local bindingKey = false
+AimbotKeyBtn.MouseButton1Click:Connect(function()
+    if bindingKey then return end
+    bindingKey = true
+    AimbotKeyBtn.Text = "Press any key..."
+    TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180,100,0)}):Play()
+end)
+
 UserInputService.InputBegan:Connect(function(input, gpe)
+    -- Toggle menu
     if not gpe and input.KeyCode == Enum.KeyCode.Insert then
         MainFrame.Visible = not MainFrame.Visible
+        return
+    end
+    -- Key binding
+    if bindingKey then
+        bindingKey = false
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            Config.Aimbot.Key = Enum.UserInputType.MouseButton1
+            Config.Aimbot.KeyName = "LMB"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+            Config.Aimbot.Key = Enum.UserInputType.MouseButton2
+            Config.Aimbot.KeyName = "RMB"
+        elseif input.KeyCode ~= Enum.KeyCode.Unknown then
+            Config.Aimbot.Key = input.KeyCode
+            Config.Aimbot.KeyName = tostring(input.KeyCode):gsub("Enum.KeyCode.","")
+        end
+        AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
+        TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
     end
 end)
 
