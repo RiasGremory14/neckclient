@@ -34,18 +34,16 @@ local Config = {
         ShowFOV = true,
         TargetPart = Hitboxes[HitboxIndex]
     },
-    SilentAim = {
-        Enabled = false,
-    },
-    ESP = {
-        Enabled = false,
-        TeamCheck = true,
-    },
-    Chams = {
+    SilentAim = { Enabled = false },
+    ESP        = { Enabled = false, TeamCheck = true },
+    Chams      = {
         Enabled = false,
         FillColor    = ChamsColors[ChamsColorIndex].fill,
         OutlineColor = ChamsColors[ChamsColorIndex].outline,
-    }
+    },
+    Fly        = { Enabled = false, Speed = 60 },
+    Noclip     = { Enabled = false },
+    TPAura     = { Enabled = false, Range = 20, Interval = 0.15 },
 }
 
 -- FOV Circle
@@ -67,7 +65,11 @@ local function GetClosestPlayer()
             or Player.Character:FindFirstChild("HumanoidRootPart")
         local hum = Player.Character:FindFirstChild("Humanoid")
         if not aimPart or not hum or hum.Health <= 0 then continue end
-        if Config.Aimbot.Enabled and Player.Team == LocalPlayer.Team then continue end
+        -- Team check only if teams are actually used in this game
+        if Config.TeamCheck then
+            local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
+            if ok and sameTeam then continue end
+        end
 
         local ScreenPoint, OnScreen = Camera:WorldToScreenPoint(aimPart.Position)
         local MousePos = UserInputService:GetMouseLocation()
@@ -82,33 +84,72 @@ local function GetClosestPlayer()
 end
 
 -- ════════════════════════════════════════
---  SILENT AIM  (hookmetamethod namecall)
+--  SILENT AIM  (Universal - works in all games)
 -- ════════════════════════════════════════
-local mt = getrawmetatable(game)
-local oldNamecall = mt.__namecall
-setreadonly(mt, false)
 
-mt.__namecall = newcclosure(function(self, ...)
-    local method = getnamecallmethod()
+-- Method 1: mousemoverel (works in Arsenal, Phantom Forces, etc.)
+local function ApplySilentAim()
+    if not Config.SilentAim.Enabled then return end
+    local target = GetClosestPlayer()
+    if not target then return end
+    local screenPos, onScreen = Camera:WorldToScreenPoint(target.Position)
+    if not onScreen then return end
+    local mouse = UserInputService:GetMouseLocation()
+    local dx = screenPos.X - mouse.X
+    local dy = screenPos.Y - mouse.Y
+    mousemoverel(dx, dy)
+    task.defer(function()
+        mousemoverel(-dx, -dy)
+    end)
+end
 
-    if Config.SilentAim.Enabled and method == "FindPartOnRayWithIgnoreList" then
-        local target = GetClosestPlayer()
-        if target then
-            local args = {...}
-            local originalRay = args[1]
-            if originalRay then
-                -- Redirect ray origin toward the target
-                local newDirection = (target.Position - Camera.CFrame.Position).Unit * originalRay.Direction.Magnitude
-                args[1] = Ray.new(Camera.CFrame.Position, newDirection)
-                return oldNamecall(self, table.unpack(args))
+-- Method 2: namecall hook covering ALL ray methods used by Roblox games
+pcall(function()
+    local mt = getrawmetatable(game)
+    local oldNamecall = mt.__namecall
+    setreadonly(mt, false)
+
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+
+        if Config.SilentAim.Enabled then
+            local target = GetClosestPlayer()
+            if target then
+                local args = {...}
+
+                -- Covers legacy ray methods (most old FPS games)
+                if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+                    local ray = args[1]
+                    if ray then
+                        local newDir = (target.Position - Camera.CFrame.Position).Unit * ray.Direction.Magnitude
+                        args[1] = Ray.new(Camera.CFrame.Position, newDir)
+                        return oldNamecall(self, table.unpack(args))
+                    end
+
+                -- Covers modern Raycast (newer FPS games like Strucid, Bad Business)
+                elseif method == "Raycast" then
+                    local newDir = (target.Position - Camera.CFrame.Position).Unit
+                    local len = args[2] and args[2].Magnitude or 1000
+                    args[1] = Camera.CFrame.Position
+                    args[2] = newDir * len
+                    return oldNamecall(self, table.unpack(args))
+
+                -- Covers ScreenPointToRay / ViewportPointToRay (some simulators)
+                elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
+                    local sp = Camera:WorldToScreenPoint(target.Position)
+                    args[1] = sp.X
+                    args[2] = sp.Y
+                    return oldNamecall(self, table.unpack(args))
+                end
             end
         end
-    end
 
-    return oldNamecall(self, ...)
+        return oldNamecall(self, ...)
+    end)
+
+    setreadonly(mt, true)
 end)
 
-setreadonly(mt, true)
 
 -- ════════════════════════════════════════
 --  ESP  (Highlight boxes)
@@ -172,9 +213,8 @@ RunService.RenderStepped:Connect(function()
     FOVCircle.Radius = Config.Aimbot.Radius
     FOVCircle.Position = UserInputService:GetMouseLocation()
 
-    -- Camera Aimbot (only when silent aim is OFF)
-    if Config.Aimbot.Enabled and not Config.SilentAim.Enabled
-        and UserInputService:IsMouseButtonPressed(Config.Aimbot.Key) then
+    -- Camera Aimbot
+    if Config.Aimbot.Enabled and UserInputService:IsMouseButtonPressed(Config.Aimbot.Key) then
         local Target = GetClosestPlayer()
         if Target then
             local CurrentCF = Camera.CFrame
@@ -183,8 +223,117 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
+    -- Silent Aim: apply on left click
+    if Config.SilentAim.Enabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        ApplySilentAim()
+    end
+
     UpdateESP()
     UpdateChams()
+end)
+
+-- ════════════════════════════════════════
+--  FLY
+-- ════════════════════════════════════════
+local FlyBodyVel, FlyBodyGyro
+
+local function EnableFly()
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+
+    FlyBodyVel = Instance.new("BodyVelocity")
+    FlyBodyVel.Velocity = Vector3.zero
+    FlyBodyVel.MaxForce = Vector3.new(1e5,1e5,1e5)
+    FlyBodyVel.Parent = Root
+
+    FlyBodyGyro = Instance.new("BodyGyro")
+    FlyBodyGyro.MaxTorque = Vector3.new(1e5,1e5,1e5)
+    FlyBodyGyro.P = 1e4
+    FlyBodyGyro.CFrame = Root.CFrame
+    FlyBodyGyro.Parent = Root
+end
+
+local function DisableFly()
+    if FlyBodyVel  then FlyBodyVel:Destroy();  FlyBodyVel  = nil end
+    if FlyBodyGyro then FlyBodyGyro:Destroy(); FlyBodyGyro = nil end
+    local Char = LocalPlayer.Character
+    if Char then
+        local hum = Char:FindFirstChild("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if not Config.Fly.Enabled or not FlyBodyVel or not FlyBodyGyro then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    local hum  = Char:FindFirstChild("Humanoid")
+    if not Root or not hum then return end
+    hum.PlatformStand = true
+
+    local dir = Vector3.zero
+    local cf  = Camera.CFrame
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+
+    FlyBodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
+    FlyBodyGyro.CFrame = cf
+end)
+
+-- ════════════════════════════════════════
+--  NOCLIP
+-- ════════════════════════════════════════
+RunService.Stepped:Connect(function()
+    if not Config.Noclip.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    for _, part in ipairs(Char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+end)
+
+-- ════════════════════════════════════════
+--  TP AURA
+-- ════════════════════════════════════════
+local lastTP = 0
+RunService.Heartbeat:Connect(function()
+    if not Config.TPAura.Enabled then return end
+    if (tick() - lastTP) < Config.TPAura.Interval then return end
+    lastTP = tick()
+
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+
+    local closestDist = math.huge
+    local closestRoot = nil
+
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player == LocalPlayer or not Player.Character then continue end
+        local enemyRoot = Player.Character:FindFirstChild("HumanoidRootPart")
+        local hum = Player.Character:FindFirstChild("Humanoid")
+        if not enemyRoot or not hum or hum.Health <= 0 then continue end
+        local dist = (enemyRoot.Position - Root.Position).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closestRoot = enemyRoot
+        end
+    end
+
+    if closestRoot then
+        -- Teleport slightly behind target to hit them
+        Root.CFrame = closestRoot.CFrame * CFrame.new(0, 0, -2.5)
+    end
 end)
 
 -- ════════════════════════════════════════
@@ -195,14 +344,16 @@ local MainFrame = Instance.new("Frame")
 local UICorner  = Instance.new("UICorner")
 local UIGradient = Instance.new("UIGradient")
 
-ScreenGui.Parent = game.CoreGui
+-- Safe GUI parent (gethui works on most executors, fallback to CoreGui)
+local guiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+ScreenGui.Parent = guiParent
 ScreenGui.Name = "PremiumScriptUI"
 ScreenGui.ResetOnSpawn = false
 
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.Position = UDim2.new(0.5, -115, 0.5, -145)
-MainFrame.Size = UDim2.new(0, 230, 0, 330)
+MainFrame.Size = UDim2.new(0, 230, 0, 490)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -268,6 +419,18 @@ local ChamsToggle    = MakeButton("Chams [OFF]",      184)
 local ChamsColorBtn  = MakeButton("Chams Color: Red/White", 226, Color3.fromRGB(255, 200, 50))
 local HitboxToggle   = MakeButton("Hitbox: Head",     272, Color3.fromRGB(255, 200, 50))
 
+-- Movement seperator line
+local Sep2 = Instance.new("Frame")
+Sep2.Parent = MainFrame
+Sep2.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+Sep2.BorderSizePixel = 0
+Sep2.Position = UDim2.new(0.05, 0, 0, 314)
+Sep2.Size = UDim2.new(0.9, 0, 0, 1)
+
+local FlyToggle    = MakeButton("Fly [OFF]",      320)
+local NoclipToggle = MakeButton("Noclip [OFF]",   362)
+local TPAuraToggle = MakeButton("TP Aura [OFF]",  404)
+
 -- Aimbot
 AimbotToggle.MouseButton1Click:Connect(function()
     Config.Aimbot.Enabled = not Config.Aimbot.Enabled
@@ -316,6 +479,28 @@ HitboxToggle.MouseButton1Click:Connect(function()
     HitboxIndex = (HitboxIndex % #Hitboxes) + 1
     Config.Aimbot.TargetPart = Hitboxes[HitboxIndex]
     HitboxToggle.Text = "Hitbox: " .. Hitboxes[HitboxIndex]
+end)
+
+-- Fly
+FlyToggle.MouseButton1Click:Connect(function()
+    Config.Fly.Enabled = not Config.Fly.Enabled
+    FlyToggle.Text = "Fly [" .. (Config.Fly.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(FlyToggle, Config.Fly.Enabled)
+    if Config.Fly.Enabled then EnableFly() else DisableFly() end
+end)
+
+-- Noclip
+NoclipToggle.MouseButton1Click:Connect(function()
+    Config.Noclip.Enabled = not Config.Noclip.Enabled
+    NoclipToggle.Text = "Noclip [" .. (Config.Noclip.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(NoclipToggle, Config.Noclip.Enabled)
+end)
+
+-- TP Aura
+TPAuraToggle.MouseButton1Click:Connect(function()
+    Config.TPAura.Enabled = not Config.TPAura.Enabled
+    TPAuraToggle.Text = "TP Aura [" .. (Config.TPAura.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(TPAuraToggle, Config.TPAura.Enabled)
 end)
 
 -- Insert key to toggle menu
