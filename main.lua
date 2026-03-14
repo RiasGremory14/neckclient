@@ -1,5 +1,5 @@
 --[[
-    Premium Roblox Script: Aimbot, Silent Aim, ESP & Chams
+    OG's Tuff script Roblox Script: Aimbot, Silent Aim, ESP & Chams
     Created for educational purposes.
 ]]
 
@@ -30,6 +30,7 @@ local Config = {
         Enabled = false,
         Key = Enum.UserInputType.MouseButton2,
         KeyName = "RMB",
+        Mode = "Hold",
         Radius = 150,
         Smoothness = 5,
         ShowFOV = true,
@@ -62,30 +63,33 @@ FOVCircle.Color = Color3.fromRGB(255, 255, 255)
 FOVCircle.Filled = false
 FOVCircle.Transparency = 0.5
 
--- Helper: get closest enemy part
 local function GetClosestPlayer()
     local Target = nil
     local MaxDistance = Config.Aimbot.Radius
+    local MousePos = UserInputService:GetMouseLocation()
+    local center = Vector2.new(MousePos.X, MousePos.Y - 36)
 
     for _, Player in pairs(Players:GetPlayers()) do
         if Player == LocalPlayer or not Player.Character then continue end
         local aimPart = Player.Character:FindFirstChild(Config.Aimbot.TargetPart)
             or Player.Character:FindFirstChild("HumanoidRootPart")
+        if not aimPart then continue end
+        
         local hum = Player.Character:FindFirstChild("Humanoid")
-        if not aimPart or not hum or hum.Health <= 0 then continue end
-        -- Global team check
-        if Config.TeamCheck then
-            local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
-            if ok and sameTeam then continue end
-        end
+        if not hum or hum.Health <= 0 then continue end
+        
+        -- Global team check (optimized, no pcall)
+        if Config.TeamCheck and Player.Team == LocalPlayer.Team then continue end
 
         local ScreenPoint, OnScreen = Camera:WorldToViewportPoint(aimPart.Position)
-        local MousePos = UserInputService:GetMouseLocation()
-        local Dist = (Vector2.new(MousePos.X, MousePos.Y - 36) - Vector2.new(ScreenPoint.X, ScreenPoint.Y)).Magnitude
+        if OnScreen then
+            local pos = Vector2.new(ScreenPoint.X, ScreenPoint.Y)
+            local Dist = (center - pos).Magnitude
 
-        if OnScreen and Dist < MaxDistance then
-            Target = aimPart
-            MaxDistance = Dist
+            if Dist < MaxDistance then
+                Target = aimPart
+                MaxDistance = Dist
+            end
         end
     end
     return Target
@@ -247,12 +251,10 @@ RunService.RenderStepped:Connect(function()
 
     -- Camera Aimbot
     local aimbotActive = false
-    if Config.Aimbot.Key and typeof(Config.Aimbot.Key) == "EnumItem" then
-        if Config.Aimbot.Key.EnumType == Enum.UserInputType then
-            aimbotActive = UserInputService:IsMouseButtonPressed(Config.Aimbot.Key)
-        elseif Config.Aimbot.Key.EnumType == Enum.KeyCode then
-            aimbotActive = UserInputService:IsKeyDown(Config.Aimbot.Key)
-        end
+    if Config.Aimbot.Mode == "Hold" then
+        aimbotActive = isAimKeyDown
+    else
+        aimbotActive = aimbotToggled
     end
     if Config.Aimbot.Enabled and aimbotActive then
         local Target = GetClosestPlayer()
@@ -451,22 +453,30 @@ end)
 -- ════════════════════════════════════════
 --  INFINITE AMMO + RAPID FIRE
 -- ════════════════════════════════════════
-local function PatchTool(tool)
-    for _, v in ipairs(tool:GetDescendants()) do
-        -- Infinite Ammo: keep any ammo/magazine value maxed
-        if (v:IsA("IntValue") or v:IsA("NumberValue")) and
-           string.lower(v.Name):find("ammo") or string.lower(v.Name):find("mag") then
-            v.Changed:Connect(function()
-                if Config.InfiniteAmmo.Enabled and v.Value < v.MaxValue then
-                    pcall(function() v.Value = v.MaxValue end)
+local lastGCPatch = 0
+local function GCWeaponPatch()
+    if typeof(getgc) ~= "function" then return end
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" then
+            local isGun = rawget(v, "Ammo") or rawget(v, "ammo") or rawget(v, "Mag") or rawget(v, "Bullets") or rawget(v, "FireRate") or rawget(v, "fireRate") or rawget(v, "Delay")
+            if isGun then
+                if Config.InfiniteAmmo.Enabled then
+                    pcall(function()
+                        if rawget(v, "Ammo") and type(v.Ammo) == "number" then rawset(v, "Ammo", 999) end
+                        if rawget(v, "ammo") and type(v.ammo) == "number" then rawset(v, "ammo", 999) end
+                        if rawget(v, "Mag") and type(v.Mag) == "number" then rawset(v, "Mag", 999) end
+                        if rawget(v, "Bullets") and type(v.Bullets) == "number" then rawset(v, "Bullets", 999) end
+                        if rawget(v, "MaxAmmo") and type(v.MaxAmmo) == "number" then rawset(v, "MaxAmmo", 999) end
+                    end)
                 end
-            end)
-        end
-        -- Rapid Fire: set fire-rate delay to near zero
-        if v:IsA("NumberValue") and
-           (string.lower(v.Name):find("firerate") or string.lower(v.Name):find("delay") or string.lower(v.Name):find("cooldown")) then
-            if Config.RapidFire.Enabled then
-                pcall(function() v.Value = 0.01 end)
+                if Config.RapidFire.Enabled then
+                    pcall(function()
+                        if rawget(v, "FireRate") and type(v.FireRate) == "number" then rawset(v, "FireRate", 0.01) end
+                        if rawget(v, "fireRate") and type(v.fireRate) == "number" then rawset(v, "fireRate", 0.01) end
+                        if rawget(v, "Delay") and type(v.Delay) == "number" then rawset(v, "Delay", 0.01) end
+                        if rawget(v, "Cooldown") and type(v.Cooldown) == "number" then rawset(v, "Cooldown", 0.01) end
+                    end)
+                end
             end
         end
     end
@@ -474,25 +484,48 @@ end
 
 RunService.Heartbeat:Connect(function()
     if not (Config.InfiniteAmmo.Enabled or Config.RapidFire.Enabled) then return end
+    
+    -- Periodic ModuleScript/Table Patching (supports ACS, CarbonEngine, etc.)
+    if tick() - lastGCPatch > 2 then
+        lastGCPatch = tick()
+        task.spawn(GCWeaponPatch)
+    end
+
     local Char = LocalPlayer.Character
     if not Char then return end
-    local tool = Char:FindFirstChildWhichIsA("Tool")
-        or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
+    local tool = Char:FindFirstChildWhichIsA("Tool") or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
     if not tool then return end
-    -- Brute-force ammo values
+
+    -- Brute-force local IntValues and Attributes
     for _, v in ipairs(tool:GetDescendants()) do
-        if Config.InfiniteAmmo.Enabled and (v:IsA("IntValue") or v:IsA("NumberValue")) then
-            local n = string.lower(v.Name)
-            if n:find("ammo") or n:find("mag") or n:find("clip") then
-                pcall(function()
-                    if v.Value < 999 then v.Value = 999 end
-                end)
+        if Config.InfiniteAmmo.Enabled then
+            if v:IsA("IntValue") or v:IsA("NumberValue") then
+                local n = string.lower(v.Name)
+                if n:find("ammo") or n:find("mag") or n:find("clip") then
+                    pcall(function() if v.Value < 999 then v.Value = 999 end end)
+                end
+            end
+            for attrName, _ in pairs(v:GetAttributes()) do
+                local n = string.lower(attrName)
+                if n:find("ammo") or n:find("mag") or n:find("clip") then
+                    pcall(function() v:SetAttribute(attrName, 999) end)
+                end
             end
         end
-        if Config.RapidFire.Enabled and v:IsA("NumberValue") then
-            local n = string.lower(v.Name)
-            if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
-                pcall(function() v.Value = 0.01 end)
+        if Config.RapidFire.Enabled then
+            if v:IsA("NumberValue") then
+                local n = string.lower(v.Name)
+                if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
+                    pcall(function() v.Value = 0.01 end)
+                end
+            end
+            for attrName, attrValue in pairs(v:GetAttributes()) do
+                if type(attrValue) == "number" then
+                    local n = string.lower(attrName)
+                    if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
+                        pcall(function() v:SetAttribute(attrName, 0.01) end)
+                    end
+                end
             end
         end
     end
@@ -509,13 +542,13 @@ local UIGradient = Instance.new("UIGradient")
 -- Safe GUI parent (gethui works on most executors, fallback to CoreGui)
 local guiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
 ScreenGui.Parent = guiParent
-ScreenGui.Name = "PremiumScriptUI"
+ScreenGui.Name = "OgsTuffScriptUI"
 ScreenGui.ResetOnSpawn = false
 
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-MainFrame.Position = UDim2.new(0.5, -115, 0.5, -145)
-MainFrame.Size = UDim2.new(0, 230, 0, 972)
+MainFrame.Position = UDim2.new(0.5, -300, 0, 20)
+MainFrame.Size = UDim2.new(0, 600, 0, 360)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -538,7 +571,7 @@ Title.Parent = MainFrame
 Title.BackgroundTransparency = 1
 Title.Size = UDim2.new(1, 0, 0, 45)
 Title.Font = Enum.Font.GothamBold
-Title.Text = "PREMIUM LUA"
+Title.Text = "OG'S TUFF SCRIPT"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 20
 
@@ -550,13 +583,26 @@ Sep.BorderSizePixel = 0
 Sep.Position = UDim2.new(0.05, 0, 0, 44)
 Sep.Size = UDim2.new(0.9, 0, 0, 1)
 
+local ContentContainer = Instance.new("ScrollingFrame")
+ContentContainer.Parent = MainFrame
+ContentContainer.Position = UDim2.new(0, 5, 0, 50)
+ContentContainer.Size = UDim2.new(1, -10, 1, -55)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.ScrollBarThickness = 4
+ContentContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+ContentContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local Grid = Instance.new("UIGridLayout")
+Grid.Parent = ContentContainer
+Grid.CellSize = UDim2.new(0, 185, 0, 34)
+Grid.CellPadding = UDim2.new(0, 8, 0, 8)
+Grid.SortOrder = Enum.SortOrder.LayoutOrder
+
 -- Helper to create a toggle button
-local function MakeButton(text, yPos, color)
+local function MakeButton(text, color)
     local btn = Instance.new("TextButton")
-    btn.Parent = MainFrame
+    btn.Parent = ContentContainer
     btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    btn.Position = UDim2.new(0.05, 0, 0, yPos)
-    btn.Size = UDim2.new(0.9, 0, 0, 34)
     btn.Font = Enum.Font.GothamMedium
     btn.Text = text
     btn.TextColor3 = color or Color3.fromRGB(150, 150, 150)
@@ -564,6 +610,49 @@ local function MakeButton(text, yPos, color)
     btn.BorderSizePixel = 0
     UICorner:Clone().Parent = btn
     return btn
+end
+
+local function MakeSliderRow(text)
+    local frame = Instance.new("Frame")
+    frame.Parent = ContentContainer
+    frame.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel")
+    label.Parent = frame
+    label.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    label.Size = UDim2.new(0.48, 0, 1, 0)
+    label.Font = Enum.Font.GothamMedium
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 13
+    label.BorderSizePixel = 0
+    UICorner:Clone().Parent = label
+
+    local minus = Instance.new("TextButton")
+    minus.Parent = frame
+    minus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    minus.Position = UDim2.new(0.5, 0, 0, 0)
+    minus.Size = UDim2.new(0.24, 0, 1, 0)
+    minus.Font = Enum.Font.GothamBold
+    minus.Text = "–"
+    minus.TextColor3 = Color3.fromRGB(255, 100, 100)
+    minus.TextSize = 18
+    minus.BorderSizePixel = 0
+    UICorner:Clone().Parent = minus
+
+    local plus = Instance.new("TextButton")
+    plus.Parent = frame
+    plus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    plus.Position = UDim2.new(0.76, 0, 0, 0)
+    plus.Size = UDim2.new(0.24, 0, 1, 0)
+    plus.Font = Enum.Font.GothamBold
+    plus.Text = "+"
+    plus.TextColor3 = Color3.fromRGB(100, 255, 100)
+    plus.TextSize = 18
+    plus.BorderSizePixel = 0
+    UICorner:Clone().Parent = plus
+    
+    return label, minus, plus
 end
 
 local function AnimateButton(button, state)
@@ -574,196 +663,45 @@ local function AnimateButton(button, state)
 end
 
 -- Buttons
-local AimbotToggle   = MakeButton("Aimbot [OFF]",     58)
-local SilentToggle   = MakeButton("Silent Aim [OFF]", 100)
-local ESPToggle      = MakeButton("ESP [OFF]",        142)
-local ChamsToggle    = MakeButton("Chams [OFF]",      184)
-local ChamsColorBtn  = MakeButton("Chams Color: Red/White", 226, Color3.fromRGB(255, 200, 50))
-local HitboxToggle   = MakeButton("Hitbox: Head",     272, Color3.fromRGB(255, 200, 50))
+local AimbotToggle   = MakeButton("Aimbot [OFF]")
+local AimModeBtn     = MakeButton("Aim Mode: Hold", Color3.fromRGB(255, 200, 50))
+local AimbotKeyBtn   = MakeButton("Aim Key: RMB", Color3.fromRGB(255, 200, 50))
+local SilentToggle   = MakeButton("Silent Aim [OFF]")
+local ESPToggle      = MakeButton("ESP [OFF]")
+local ChamsToggle    = MakeButton("Chams [OFF]")
+local ChamsColorBtn  = MakeButton("Chams Color: Red/White", Color3.fromRGB(255, 200, 50))
+local HitboxToggle   = MakeButton("Hitbox: Head", Color3.fromRGB(255, 200, 50))
+local TPAuraToggle   = MakeButton("TP Aura [OFF]")
+local EnemyTPToggle  = MakeButton("Enemy TP Aura [OFF]")
+local KnifeAuraToggle = MakeButton("Knife Aura [OFF]")
+local FlyToggle      = MakeButton("Fly [OFF]")
+local NoclipToggle   = MakeButton("Noclip [OFF]")
+local InfJumpToggle  = MakeButton("Inf. Jump [OFF]")
+local InfAmmoToggle  = MakeButton("Inf. Ammo [OFF]")
+local RapidFireToggle = MakeButton("Rapid Fire [OFF]")
+local MagicBulletToggle = MakeButton("Magic Bullet [OFF]")
+local TeamCheckToggle = MakeButton("Team Check [ON]", Color3.fromRGB(50, 255, 100))
 
--- Movement seperator line
-local Sep2 = Instance.new("Frame")
-Sep2.Parent = MainFrame
-Sep2.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
-Sep2.BorderSizePixel = 0
-Sep2.Position = UDim2.new(0.05, 0, 0, 314)
-Sep2.Size = UDim2.new(0.9, 0, 0, 1)
-
-local FlyToggle    = MakeButton("Fly [OFF]",      320)
-local NoclipToggle = MakeButton("Noclip [OFF]",   362)
-local TPAuraToggle = MakeButton("TP Aura [OFF]",  404)
-
--- Misc separator
-local Sep3 = Instance.new("Frame")
-Sep3.Parent = MainFrame
-Sep3.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
-Sep3.BorderSizePixel = 0
-Sep3.Position = UDim2.new(0.05, 0, 0, 447)
-Sep3.Size = UDim2.new(0.9, 0, 0, 1)
-
-local InfJumpToggle   = MakeButton("Inf. Jump [OFF]",   453)
-local InfAmmoToggle   = MakeButton("Inf. Ammo [OFF]",   495)
-local RapidFireToggle = MakeButton("Rapid Fire [OFF]",  537)
-local MagicBulletToggle  = MakeButton("Magic Bullet [OFF]",  579)
-local EnemyTPToggle      = MakeButton("Enemy TP Aura [OFF]", 621)
-local TeamCheckToggle    = MakeButton("Team Check [ON]",      663, Color3.fromRGB(50, 255, 100))
-
--- FOV row: label + minus + plus
-local FOVLabel = Instance.new("TextLabel")
-FOVLabel.Parent = MainFrame
-FOVLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-FOVLabel.Position = UDim2.new(0.05, 0, 0, 707)
-FOVLabel.Size = UDim2.new(0.48, 0, 0, 34)
-FOVLabel.Font = Enum.Font.GothamMedium
-FOVLabel.Text = "FOV: 150"
-FOVLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-FOVLabel.TextSize = 13
-FOVLabel.BorderSizePixel = 0
-UICorner:Clone().Parent = FOVLabel
-
-local FOVMinus = Instance.new("TextButton")
-FOVMinus.Parent = MainFrame
-FOVMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-FOVMinus.Position = UDim2.new(0.56, 0, 0, 707)
-FOVMinus.Size = UDim2.new(0.18, 0, 0, 34)
-FOVMinus.Font = Enum.Font.GothamBold
-FOVMinus.Text = "–"
-FOVMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
-FOVMinus.TextSize = 18
-FOVMinus.BorderSizePixel = 0
-UICorner:Clone().Parent = FOVMinus
-
-local FOVPlus = Instance.new("TextButton")
-FOVPlus.Parent = MainFrame
-FOVPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-FOVPlus.Position = UDim2.new(0.77, 0, 0, 707)
-FOVPlus.Size = UDim2.new(0.18, 0, 0, 34)
-FOVPlus.Font = Enum.Font.GothamBold
-FOVPlus.Text = "+"
-FOVPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
-FOVPlus.TextSize = 18
-FOVPlus.BorderSizePixel = 0
-UICorner:Clone().Parent = FOVPlus
-
--- Smooth row
-local SmoothLabel = Instance.new("TextLabel")
-SmoothLabel.Parent = MainFrame
-SmoothLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-SmoothLabel.Position = UDim2.new(0.05, 0, 0, 749)
-SmoothLabel.Size = UDim2.new(0.48, 0, 0, 34)
-SmoothLabel.Font = Enum.Font.GothamMedium
-SmoothLabel.Text = "Smooth: 5"
-SmoothLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-SmoothLabel.TextSize = 13
-SmoothLabel.BorderSizePixel = 0
-UICorner:Clone().Parent = SmoothLabel
-
-local SmoothMinus = Instance.new("TextButton")
-SmoothMinus.Parent = MainFrame
-SmoothMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-SmoothMinus.Position = UDim2.new(0.56, 0, 0, 749)
-SmoothMinus.Size = UDim2.new(0.18, 0, 0, 34)
-SmoothMinus.Font = Enum.Font.GothamBold
-SmoothMinus.Text = "–"
-SmoothMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
-SmoothMinus.TextSize = 18
-SmoothMinus.BorderSizePixel = 0
-UICorner:Clone().Parent = SmoothMinus
-
-local SmoothPlus = Instance.new("TextButton")
-SmoothPlus.Parent = MainFrame
-SmoothPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-SmoothPlus.Position = UDim2.new(0.77, 0, 0, 749)
-SmoothPlus.Size = UDim2.new(0.18, 0, 0, 34)
-SmoothPlus.Font = Enum.Font.GothamBold
-SmoothPlus.Text = "+"
-SmoothPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
-SmoothPlus.TextSize = 18
-SmoothPlus.BorderSizePixel = 0
-UICorner:Clone().Parent = SmoothPlus
-
--- Speed row
-local SpeedLabel = Instance.new("TextLabel")
-SpeedLabel.Parent = MainFrame
-SpeedLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-SpeedLabel.Position = UDim2.new(0.05, 0, 0, 791)
-SpeedLabel.Size = UDim2.new(0.48, 0, 0, 34)
-SpeedLabel.Font = Enum.Font.GothamMedium
-SpeedLabel.Text = "Speed: 16"
-SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-SpeedLabel.TextSize = 13
-SpeedLabel.BorderSizePixel = 0
-UICorner:Clone().Parent = SpeedLabel
-
-local SpeedMinus = Instance.new("TextButton")
-SpeedMinus.Parent = MainFrame
-SpeedMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-SpeedMinus.Position = UDim2.new(0.56, 0, 0, 791)
-SpeedMinus.Size = UDim2.new(0.18, 0, 0, 34)
-SpeedMinus.Font = Enum.Font.GothamBold
-SpeedMinus.Text = "–"
-SpeedMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
-SpeedMinus.TextSize = 18
-SpeedMinus.BorderSizePixel = 0
-UICorner:Clone().Parent = SpeedMinus
-
-local SpeedPlus = Instance.new("TextButton")
-SpeedPlus.Parent = MainFrame
-SpeedPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-SpeedPlus.Position = UDim2.new(0.77, 0, 0, 791)
-SpeedPlus.Size = UDim2.new(0.18, 0, 0, 34)
-SpeedPlus.Font = Enum.Font.GothamBold
-SpeedPlus.Text = "+"
-SpeedPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
-SpeedPlus.TextSize = 18
-SpeedPlus.BorderSizePixel = 0
-UICorner:Clone().Parent = SpeedPlus
-
--- Fly Speed row
-local FlySpeedLabel = Instance.new("TextLabel")
-FlySpeedLabel.Parent = MainFrame
-FlySpeedLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-FlySpeedLabel.Position = UDim2.new(0.05, 0, 0, 833)
-FlySpeedLabel.Size = UDim2.new(0.48, 0, 0, 34)
-FlySpeedLabel.Font = Enum.Font.GothamMedium
-FlySpeedLabel.Text = "Fly Spd: 60"
-FlySpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-FlySpeedLabel.TextSize = 13
-FlySpeedLabel.BorderSizePixel = 0
-UICorner:Clone().Parent = FlySpeedLabel
-
-local FlySpeedMinus = Instance.new("TextButton")
-FlySpeedMinus.Parent = MainFrame
-FlySpeedMinus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-FlySpeedMinus.Position = UDim2.new(0.56, 0, 0, 833)
-FlySpeedMinus.Size = UDim2.new(0.18, 0, 0, 34)
-FlySpeedMinus.Font = Enum.Font.GothamBold
-FlySpeedMinus.Text = "–"
-FlySpeedMinus.TextColor3 = Color3.fromRGB(255, 100, 100)
-FlySpeedMinus.TextSize = 18
-FlySpeedMinus.BorderSizePixel = 0
-UICorner:Clone().Parent = FlySpeedMinus
-
-local FlySpeedPlus = Instance.new("TextButton")
-FlySpeedPlus.Parent = MainFrame
-FlySpeedPlus.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-FlySpeedPlus.Position = UDim2.new(0.77, 0, 0, 833)
-FlySpeedPlus.Size = UDim2.new(0.18, 0, 0, 34)
-FlySpeedPlus.Font = Enum.Font.GothamBold
-FlySpeedPlus.Text = "+"
-FlySpeedPlus.TextColor3 = Color3.fromRGB(100, 255, 100)
-FlySpeedPlus.TextSize = 18
-FlySpeedPlus.BorderSizePixel = 0
-UICorner:Clone().Parent = FlySpeedPlus
-
-local AimbotKeyBtn = MakeButton("Aim Key: RMB", 879, Color3.fromRGB(255, 200, 50))
-local KnifeAuraToggle = MakeButton("Knife Aura [OFF]", 921)
+local FOVLabel, FOVMinus, FOVPlus = MakeSliderRow("FOV: 150")
+local SmoothLabel, SmoothMinus, SmoothPlus = MakeSliderRow("Smooth: 5")
+local SpeedLabel, SpeedMinus, SpeedPlus = MakeSliderRow("Speed: 16")
+local FlySpeedLabel, FlySpeedMinus, FlySpeedPlus = MakeSliderRow("Fly Spd: 60")
 
 -- Aimbot
 AimbotToggle.MouseButton1Click:Connect(function()
     Config.Aimbot.Enabled = not Config.Aimbot.Enabled
     AimbotToggle.Text = "Aimbot [" .. (Config.Aimbot.Enabled and "ON" or "OFF") .. "]"
     AnimateButton(AimbotToggle, Config.Aimbot.Enabled)
+end)
+
+-- Aim Mode
+AimModeBtn.MouseButton1Click:Connect(function()
+    if Config.Aimbot.Mode == "Hold" then
+        Config.Aimbot.Mode = "Toggle"
+    else
+        Config.Aimbot.Mode = "Hold"
+    end
+    AimModeBtn.Text = "Aim Mode: " .. Config.Aimbot.Mode
 end)
 
 -- Silent Aim
@@ -953,9 +891,12 @@ AimbotKeyBtn.MouseButton1Click:Connect(function()
     TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180,100,0)}):Play()
 end)
 
+local isAimKeyDown = false
+local aimbotToggled = false
+
 UserInputService.InputBegan:Connect(function(input, gpe)
     -- Toggle menu
-    if not gpe and input.KeyCode == Enum.KeyCode.Insert then
+    if not gpe and input.KeyCode == Enum.KeyCode.P then
         MainFrame.Visible = not MainFrame.Visible
         return
     end
@@ -968,16 +909,38 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
             Config.Aimbot.Key = Enum.UserInputType.MouseButton2
             Config.Aimbot.KeyName = "RMB"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
+            Config.Aimbot.Key = Enum.UserInputType.MouseButton3
+            Config.Aimbot.KeyName = "MMB"
+        elseif string.find(tostring(input.UserInputType), "MouseButton") then
+            Config.Aimbot.Key = input.UserInputType
+            Config.Aimbot.KeyName = tostring(input.UserInputType):gsub("Enum.UserInputType.", "")
         elseif input.KeyCode ~= Enum.KeyCode.Unknown then
             Config.Aimbot.Key = input.KeyCode
             Config.Aimbot.KeyName = tostring(input.KeyCode):gsub("Enum.KeyCode.","")
         end
         AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
         TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+        return
+    end
+
+    if not gpe then
+        if input.UserInputType == Config.Aimbot.Key or input.KeyCode == Config.Aimbot.Key then
+            isAimKeyDown = true
+            if Config.Aimbot.Mode == "Toggle" then
+                aimbotToggled = not aimbotToggled
+            end
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gpe)
+    if input.UserInputType == Config.Aimbot.Key or input.KeyCode == Config.Aimbot.Key then
+        isAimKeyDown = false
     end
 end)
 
 print("---------------------------")
-print("Premium Lua Loaded!")
-print("Press 'Insert' to toggle menu")
+print("OG's Tuff script Loaded!")
+print("Press 'P' to toggle menu")
 print("---------------------------")
