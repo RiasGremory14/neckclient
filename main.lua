@@ -1,6 +1,5 @@
 --[[
-    OG's Tuff script Roblox Script: Aimbot, Silent Aim, ESP & Chams
-    Created for educational purposes.
+    OG's Tuff script Roblox Script
 ]]
 
 local Players = game:GetService("Players")
