@@ -31,7 +31,7 @@ local Config = {
         Key = Enum.UserInputType.MouseButton2,
         KeyName = "RMB",
         Radius = 150,
-        Smoothness = 0.5,
+        Smoothness = 5,
         ShowFOV = true,
         TargetPart = Hitboxes[HitboxIndex]
     },
@@ -51,6 +51,7 @@ local Config = {
     RapidFire     = { Enabled = false },
     MagicBullet   = { Enabled = false },
     EnemyTPAura   = { Enabled = false, Interval = 0.15 },
+    KnifeAura     = { Enabled = false, Range = 15 },
 }
 
 -- FOV Circle
@@ -78,9 +79,9 @@ local function GetClosestPlayer()
             if ok and sameTeam then continue end
         end
 
-        local ScreenPoint, OnScreen = Camera:WorldToScreenPoint(aimPart.Position)
+        local ScreenPoint, OnScreen = Camera:WorldToViewportPoint(aimPart.Position)
         local MousePos = UserInputService:GetMouseLocation()
-        local Dist = (Vector2.new(MousePos.X, MousePos.Y) - Vector2.new(ScreenPoint.X, ScreenPoint.Y)).Magnitude
+        local Dist = (Vector2.new(MousePos.X, MousePos.Y - 36) - Vector2.new(ScreenPoint.X, ScreenPoint.Y)).Magnitude
 
         if OnScreen and Dist < MaxDistance then
             Target = aimPart
@@ -94,22 +95,7 @@ end
 --  SILENT AIM  (Universal - works in all games)
 -- ════════════════════════════════════════
 
--- Method 1: hold-snap silent aim (fires continuously while LMB held, no snap-back flicker)
-local silentAimConn
-local function ApplySilentAim()
-    if not Config.SilentAim.Enabled then return end
-    local target = GetClosestPlayer()
-    if not target then return end
-    local screenPos, onScreen = Camera:WorldToScreenPoint(target.Position)
-    if not onScreen then return end
-    local mouse = UserInputService:GetMouseLocation()
-    -- clamp movement so it doesn't teleport wildly
-    local dx = math.clamp(screenPos.X - mouse.X, -400, 400)
-    local dy = math.clamp(screenPos.Y - mouse.Y, -400, 400)
-    mousemoverel(dx, dy)
-end
-
--- Method 2: namecall hook covering ALL ray methods used by Roblox games
+-- Namecall hook covering ALL ray methods used by Roblox games
 pcall(function()
     local mt = getrawmetatable(game)
     local oldNamecall = mt.__namecall
@@ -178,6 +164,10 @@ pcall(function()
                     -- Redirect any Vector3 that looks like a world position (not zero)
                     elseif typeof(v) == "Vector3" and v.Magnitude > 1 then
                         args[i] = target.Position
+                        modified = true
+                    -- Spoof Hitbox (Wallbang): substitute wall parts with the enemy's part
+                    elseif typeof(v) == "Instance" and v:IsA("BasePart") then
+                        args[i] = target
                         modified = true
                     end
                 end
@@ -269,13 +259,9 @@ RunService.RenderStepped:Connect(function()
         if Target then
             local CurrentCF = Camera.CFrame
             local NewLookAt = CFrame.new(CurrentCF.Position, Target.Position)
-            Camera.CFrame = CurrentCF:Lerp(NewLookAt, Config.Aimbot.Smoothness)
+            local lerpFactor = Config.Aimbot.Smoothness == 0 and 1 or (0.5 / Config.Aimbot.Smoothness)
+            Camera.CFrame = CurrentCF:Lerp(NewLookAt, lerpFactor)
         end
-    end
-
-    -- Silent Aim: continuously snap while LMB held
-    if Config.SilentAim.Enabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-        ApplySilentAim()
     end
 
     UpdateESP()
@@ -285,56 +271,49 @@ end)
 -- ════════════════════════════════════════
 --  FLY
 -- ════════════════════════════════════════
-local FlyBodyVel, FlyBodyGyro
-
-local function EnableFly()
-    local Char = LocalPlayer.Character
-    if not Char then return end
-    local Root = Char:FindFirstChild("HumanoidRootPart")
-    if not Root then return end
-
-    FlyBodyVel = Instance.new("BodyVelocity")
-    FlyBodyVel.Velocity = Vector3.zero
-    FlyBodyVel.MaxForce = Vector3.new(1e5,1e5,1e5)
-    FlyBodyVel.Parent = Root
-
-    FlyBodyGyro = Instance.new("BodyGyro")
-    FlyBodyGyro.MaxTorque = Vector3.new(1e5,1e5,1e5)
-    FlyBodyGyro.P = 1e4
-    FlyBodyGyro.CFrame = Root.CFrame
-    FlyBodyGyro.Parent = Root
-end
-
-local function DisableFly()
-    if FlyBodyVel  then FlyBodyVel:Destroy();  FlyBodyVel  = nil end
-    if FlyBodyGyro then FlyBodyGyro:Destroy(); FlyBodyGyro = nil end
-    local Char = LocalPlayer.Character
-    if Char then
-        local hum = Char:FindFirstChild("Humanoid")
-        if hum then hum.PlatformStand = false end
-    end
-end
-
 RunService.RenderStepped:Connect(function()
-    if not Config.Fly.Enabled or not FlyBodyVel or not FlyBodyGyro then return end
     local Char = LocalPlayer.Character
     if not Char then return end
     local Root = Char:FindFirstChild("HumanoidRootPart")
     local hum  = Char:FindFirstChild("Humanoid")
     if not Root or not hum then return end
-    hum.PlatformStand = true
 
-    local dir = Vector3.zero
-    local cf  = Camera.CFrame
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
-    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+    local bodyVel = Root:FindFirstChild("FlyBodyVel")
+    local bodyGyro = Root:FindFirstChild("FlyBodyGyro")
 
-    FlyBodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
-    FlyBodyGyro.CFrame = cf
+    if Config.Fly.Enabled then
+        if not bodyVel then
+            bodyVel = Instance.new("BodyVelocity")
+            bodyVel.Name = "FlyBodyVel"
+            bodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+            bodyVel.Parent = Root
+        end
+        if not bodyGyro then
+            bodyGyro = Instance.new("BodyGyro")
+            bodyGyro.Name = "FlyBodyGyro"
+            bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+            bodyGyro.P = 1e4
+            bodyGyro.Parent = Root
+        end
+
+        hum.PlatformStand = true
+
+        local dir = Vector3.zero
+        local cf  = Camera.CFrame
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+
+        bodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
+        bodyGyro.CFrame = cf
+    else
+        if bodyVel then bodyVel:Destroy() end
+        if bodyGyro then bodyGyro:Destroy() end
+        if hum.PlatformStand then hum.PlatformStand = false end
+    end
 end)
 
 -- ════════════════════════════════════════
@@ -410,9 +389,51 @@ RunService.Heartbeat:Connect(function()
             local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
             if ok and sameTeam then continue end
         end
+        -- Pull enemy right in front of player
         pcall(function()
             enemyRoot.CFrame = Root.CFrame * CFrame.new(0, 0, -2)
+            -- Auto attack / kill the target instantly if possible
+            if hum then
+                hum.Health = 0
+            end
+            -- Also try to damage them physically or break joints
+            enemyRoot.AssemblyLinearVelocity = Vector3.new(0, -1000, 0)
+            enemyRoot:BreakJoints()
         end)
+    end
+end)
+
+-- ════════════════════════════════════════
+--  KNIFE AURA (Auto Melee)
+-- ════════════════════════════════════════
+RunService.Heartbeat:Connect(function()
+    if not Config.KnifeAura.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+
+    local targetInRange = false
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player == LocalPlayer or not Player.Character then continue end
+        local enemyRoot = Player.Character:FindFirstChild("HumanoidRootPart")
+        local hum = Player.Character:FindFirstChild("Humanoid")
+        if not enemyRoot or not hum or hum.Health <= 0 then continue end
+        if Config.TeamCheck then
+            local ok, sameTeam = pcall(function() return Player.Team == LocalPlayer.Team end)
+            if ok and sameTeam then continue end
+        end
+        if (enemyRoot.Position - Root.Position).Magnitude <= Config.KnifeAura.Range then
+            targetInRange = true
+            break
+        end
+    end
+
+    if targetInRange then
+        local tool = Char:FindFirstChildWhichIsA("Tool")
+        if tool then
+            pcall(function() tool:Activate() end)
+        end
     end
 end)
 
@@ -494,7 +515,7 @@ ScreenGui.ResetOnSpawn = false
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.Position = UDim2.new(0.5, -115, 0.5, -145)
-MainFrame.Size = UDim2.new(0, 230, 0, 930)
+MainFrame.Size = UDim2.new(0, 230, 0, 972)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -631,7 +652,7 @@ SmoothLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 SmoothLabel.Position = UDim2.new(0.05, 0, 0, 749)
 SmoothLabel.Size = UDim2.new(0.48, 0, 0, 34)
 SmoothLabel.Font = Enum.Font.GothamMedium
-SmoothLabel.Text = "Smooth: 0.5"
+SmoothLabel.Text = "Smooth: 5"
 SmoothLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 SmoothLabel.TextSize = 13
 SmoothLabel.BorderSizePixel = 0
@@ -736,6 +757,7 @@ FlySpeedPlus.BorderSizePixel = 0
 UICorner:Clone().Parent = FlySpeedPlus
 
 local AimbotKeyBtn = MakeButton("Aim Key: RMB", 879, Color3.fromRGB(255, 200, 50))
+local KnifeAuraToggle = MakeButton("Knife Aura [OFF]", 921)
 
 -- Aimbot
 AimbotToggle.MouseButton1Click:Connect(function()
@@ -792,7 +814,6 @@ FlyToggle.MouseButton1Click:Connect(function()
     Config.Fly.Enabled = not Config.Fly.Enabled
     FlyToggle.Text = "Fly [" .. (Config.Fly.Enabled and "ON" or "OFF") .. "]"
     AnimateButton(FlyToggle, Config.Fly.Enabled)
-    if Config.Fly.Enabled then EnableFly() else DisableFly() end
 end)
 
 -- Noclip
@@ -844,6 +865,13 @@ EnemyTPToggle.MouseButton1Click:Connect(function()
     AnimateButton(EnemyTPToggle, Config.EnemyTPAura.Enabled)
 end)
 
+-- Knife Aura
+KnifeAuraToggle.MouseButton1Click:Connect(function()
+    Config.KnifeAura.Enabled = not Config.KnifeAura.Enabled
+    KnifeAuraToggle.Text = "Knife Aura [" .. (Config.KnifeAura.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(KnifeAuraToggle, Config.KnifeAura.Enabled)
+end)
+
 -- Team Check
 TeamCheckToggle.MouseButton1Click:Connect(function()
     Config.TeamCheck = not Config.TeamCheck
@@ -861,18 +889,18 @@ FOVMinus.MouseButton1Click:Connect(function()
 end)
 
 FOVPlus.MouseButton1Click:Connect(function()
-    Config.Aimbot.Radius = math.min(500, Config.Aimbot.Radius + 10)
+    Config.Aimbot.Radius = math.min(1500, Config.Aimbot.Radius + 10)
     FOVLabel.Text = "FOV: " .. Config.Aimbot.Radius
 end)
 
 -- Smooth controls
 SmoothMinus.MouseButton1Click:Connect(function()
-    Config.Aimbot.Smoothness = math.max(0.05, math.floor((Config.Aimbot.Smoothness - 0.05) * 100 + 0.5) / 100)
+    Config.Aimbot.Smoothness = math.max(0, Config.Aimbot.Smoothness - 1)
     SmoothLabel.Text = "Smooth: " .. Config.Aimbot.Smoothness
 end)
 
 SmoothPlus.MouseButton1Click:Connect(function()
-    Config.Aimbot.Smoothness = math.min(1.0, math.floor((Config.Aimbot.Smoothness + 0.05) * 100 + 0.5) / 100)
+    Config.Aimbot.Smoothness = math.min(10, Config.Aimbot.Smoothness + 1)
     SmoothLabel.Text = "Smooth: " .. Config.Aimbot.Smoothness
 end)
 
