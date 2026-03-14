@@ -106,7 +106,9 @@ local function ComputeClosestPlayer()
 
     for _, Player in pairs(Players:GetPlayers()) do
         if Player == LocalPlayer or not Player.Character then continue end
-        local aimPart = Player.Character:FindFirstChild(Config.Aimbot.TargetPart)
+        -- HeadHB = custom hitbox used in some FPS games (e.g. Arsenal), prioritize it
+        local aimPart = Player.Character:FindFirstChild("HeadHB")
+            or Player.Character:FindFirstChild(Config.Aimbot.TargetPart)
             or Player.Character:FindFirstChild("HumanoidRootPart")
         if not aimPart then continue end
         local hum = Player.Character:FindFirstChild("Humanoid")
@@ -312,27 +314,28 @@ RunService.RenderStepped:Connect(function(dt)
     FOVCircle.Radius   = Config.Aimbot.Radius
     FOVCircle.Position = UserInputService:GetMouseLocation()
 
-    -- 3. Camera aimbot
+    -- 3. mousemoverel aimbot (undetectable, no CFrame manipulation)
     local aimbotActive = (Config.Aimbot.Mode == "Hold") and isAimKeyDown or aimbotToggled
-    if Config.Aimbot.Enabled and aimbotActive and _cachedTarget then
+    if Config.Aimbot.Enabled and aimbotActive and _cachedTarget and mousemoverel then
         local target = _cachedTarget
-        local CurrentCF = Camera.CFrame
         local predictedPos = PredictPosition(target, dt)
 
-        local NewLookAt = CFrame.new(CurrentCF.Position, predictedPos)
+        -- Project predicted world position to screen
+        local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
+        if onScreen then
+            local mouseLoc = UserInputService:GetMouseLocation()
 
-        -- dt-based smooth: frame-rate independent
-        -- smoothness 0 = instant lock, 10 = very slow
-        local smooth = Config.Aimbot.Smoothness
-        local lerpFactor
-        if smooth <= 0 then
-            lerpFactor = 1
-        else
-            -- Exponential smoothing: feels natural, not linear
-            lerpFactor = 1 - math.exp(-dt * (11 - smooth) * 6)
+            -- Delta between target screen pos and current mouse pos
+            local dx = screenPos.X - mouseLoc.X
+            local dy = screenPos.Y - mouseLoc.Y
+
+            -- Smoothness: 0 = instant, 10 = very slow
+            -- dt-based exponential so it's frame-rate independent
+            local smooth = Config.Aimbot.Smoothness
+            local factor = smooth <= 0 and 1 or (1 - math.exp(-dt * (11 - smooth) * 6))
+
+            mousemoverel(dx * factor, dy * factor)
         end
-
-        Camera.CFrame = CurrentCF:Lerp(NewLookAt, lerpFactor)
     end
 end)
 
