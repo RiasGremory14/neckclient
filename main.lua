@@ -1,5 +1,6 @@
 --[[
-    OG's Tuff script Roblox Script
+    OG's Tuff script Roblox Script: Aimbot, Silent Aim, ESP & Chams
+    Created for educational purposes.
 ]]
 
 local Players = game:GetService("Players")
@@ -33,7 +34,9 @@ local Config = {
         Radius = 150,
         Smoothness = 5,
         ShowFOV = true,
-        TargetPart = Hitboxes[HitboxIndex]
+        TargetPart = Hitboxes[HitboxIndex],
+        Prediction = 0.12,
+        AimOffset = Vector3.new(0, 0, 0)
     },
     SilentAim     = { Enabled = false },
     ESP           = { Enabled = false },
@@ -43,7 +46,7 @@ local Config = {
         FillColor    = ChamsColors[ChamsColorIndex].fill,
         OutlineColor = ChamsColors[ChamsColorIndex].outline,
     },
-    Fly           = { Enabled = false, Speed = 60 },
+    Fly           = { Enabled = false, Speed = 60, Mode = "Normal" },
     Noclip        = { Enabled = false },
     TPAura        = { Enabled = false, Range = 20, Interval = 0.15 },
     InfiniteJump  = { Enabled = false },
@@ -67,6 +70,7 @@ local function GetClosestPlayer()
     local MaxDistance = Config.Aimbot.Radius
     local MousePos = UserInputService:GetMouseLocation()
     local center = Vector2.new(MousePos.X, MousePos.Y - 36)
+    local closestDistance = math.huge
 
     for _, Player in pairs(Players:GetPlayers()) do
         if Player == LocalPlayer or not Player.Character then continue end
@@ -85,8 +89,13 @@ local function GetClosestPlayer()
             local pos = Vector2.new(ScreenPoint.X, ScreenPoint.Y)
             local Dist = (center - pos).Magnitude
 
-            if Dist < MaxDistance then
+            -- Enhanced targeting with distance weighting
+            local worldDistance = (aimPart.Position - Camera.CFrame.Position).Magnitude
+            local weightedDistance = Dist + (worldDistance * 0.01)
+
+            if weightedDistance < closestDistance then
                 Target = aimPart
+                closestDistance = weightedDistance
                 MaxDistance = Dist
             end
         end
@@ -111,19 +120,27 @@ pcall(function()
             local target = GetClosestPlayer()
             if target then
                 local args = {...}
+                
+                -- Enhanced prediction for silent aim
+                local predictedPos = target.Position
+                local humanoid = target.Parent:FindFirstChild("Humanoid")
+                if humanoid and humanoid.MoveDirection ~= Vector3.new(0,0,0) then
+                    local velocity = humanoid.MoveDirection * humanoid.WalkSpeed
+                    predictedPos = target.Position + (velocity * Config.Aimbot.Prediction)
+                end
 
                 -- Covers legacy ray methods (most old FPS games)
                 if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
                     local ray = args[1]
                     if ray then
-                        local newDir = (target.Position - Camera.CFrame.Position).Unit * ray.Direction.Magnitude
+                        local newDir = (predictedPos - Camera.CFrame.Position).Unit * ray.Direction.Magnitude
                         args[1] = Ray.new(Camera.CFrame.Position, newDir)
                         return oldNamecall(self, table.unpack(args))
                     end
 
                 -- Covers modern Raycast (newer FPS games like Strucid, Bad Business)
                 elseif method == "Raycast" then
-                    local newDir = (target.Position - Camera.CFrame.Position).Unit
+                    local newDir = (predictedPos - Camera.CFrame.Position).Unit
                     local len = args[2] and args[2].Magnitude or 1000
                     args[1] = Camera.CFrame.Position
                     args[2] = newDir * len
@@ -131,7 +148,7 @@ pcall(function()
 
                 -- Covers ScreenPointToRay / ViewportPointToRay (some simulators)
                 elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
-                    local sp = Camera:WorldToScreenPoint(target.Position)
+                    local sp = Camera:WorldToScreenPoint(predictedPos)
                     args[1] = sp.X
                     args[2] = sp.Y
                     return oldNamecall(self, table.unpack(args))
@@ -259,8 +276,30 @@ RunService.RenderStepped:Connect(function()
         local Target = GetClosestPlayer()
         if Target then
             local CurrentCF = Camera.CFrame
-            local NewLookAt = CFrame.new(CurrentCF.Position, Target.Position)
-            local lerpFactor = Config.Aimbot.Smoothness == 0 and 1 or (0.5 / Config.Aimbot.Smoothness)
+            
+            -- Enhanced prediction
+            local humanoid = Target.Parent:FindFirstChild("Humanoid")
+            local predictedPos = Target.Position
+            if humanoid and humanoid.MoveDirection ~= Vector3.new(0,0,0) then
+                local velocity = humanoid.MoveDirection * humanoid.WalkSpeed
+                predictedPos = Target.Position + (velocity * Config.Aimbot.Prediction)
+            end
+            
+            -- Apply aim offset
+            predictedPos = predictedPos + Config.Aimbot.AimOffset
+            
+            local NewLookAt = CFrame.new(CurrentCF.Position, predictedPos)
+            
+            -- Dynamic smoothness based on distance
+            local distance = (Target.Position - CurrentCF.Position).Magnitude
+            local dynamicSmooth = Config.Aimbot.Smoothness
+            if distance < 50 then
+                dynamicSmooth = math.max(1, Config.Aimbot.Smoothness - 2)
+            elseif distance > 200 then
+                dynamicSmooth = Config.Aimbot.Smoothness + 1
+            end
+            
+            local lerpFactor = dynamicSmooth == 0 and 1 or (0.5 / dynamicSmooth)
             Camera.CFrame = CurrentCF:Lerp(NewLookAt, lerpFactor)
         end
     end
@@ -308,7 +347,15 @@ RunService.RenderStepped:Connect(function()
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
 
-        bodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
+        if Config.Fly.Mode == "Slide" then
+            -- Slide mode: smooth acceleration/deceleration
+            local targetVel = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
+            bodyVel.Velocity = bodyVel.Velocity:Lerp(targetVel, 0.1)
+        else
+            -- Normal mode: instant movement
+            bodyVel.Velocity = dir.Magnitude > 0 and dir.Unit * Config.Fly.Speed or Vector3.zero
+        end
+        
         bodyGyro.CFrame = cf
     else
         if bodyVel then bodyVel:Destroy() end
@@ -393,13 +440,9 @@ RunService.Heartbeat:Connect(function()
         -- Pull enemy right in front of player
         pcall(function()
             enemyRoot.CFrame = Root.CFrame * CFrame.new(0, 0, -2)
-            -- Auto attack / kill the target instantly if possible
-            if hum then
-                hum.Health = 0
-            end
-            -- Also try to damage them physically or break joints
-            enemyRoot.AssemblyLinearVelocity = Vector3.new(0, -1000, 0)
-            enemyRoot:BreakJoints()
+            -- We remove BreakJoints and Health changes here because in FilteringEnabled games (like Arsenal),
+            -- this just breaks the character on your screen visually (client-sided) and causes them to glitch out.
+            enemyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         end)
     end
 end)
@@ -457,15 +500,22 @@ local function GCWeaponPatch()
     if typeof(getgc) ~= "function" then return end
     for _, v in pairs(getgc(true)) do
         if type(v) == "table" then
-            local isGun = rawget(v, "Ammo") or rawget(v, "ammo") or rawget(v, "Mag") or rawget(v, "Bullets") or rawget(v, "FireRate") or rawget(v, "fireRate") or rawget(v, "Delay")
+            local isGun = rawget(v, "Ammo") or rawget(v, "ammo") or rawget(v, "Mag") or rawget(v, "mag") or rawget(v, "Bullets") or rawget(v, "bullets") or rawget(v, "FireRate") or rawget(v, "fireRate") or rawget(v, "Delay") or rawget(v, "Clip") or rawget(v, "clip") or rawget(v, "MaxAmmo") or rawget(v, "maxAmmo")
             if isGun then
                 if Config.InfiniteAmmo.Enabled then
                     pcall(function()
                         if rawget(v, "Ammo") and type(v.Ammo) == "number" then rawset(v, "Ammo", 999) end
                         if rawget(v, "ammo") and type(v.ammo) == "number" then rawset(v, "ammo", 999) end
                         if rawget(v, "Mag") and type(v.Mag) == "number" then rawset(v, "Mag", 999) end
+                        if rawget(v, "mag") and type(v.mag) == "number" then rawset(v, "mag", 999) end
                         if rawget(v, "Bullets") and type(v.Bullets) == "number" then rawset(v, "Bullets", 999) end
+                        if rawget(v, "bullets") and type(v.bullets) == "number" then rawset(v, "bullets", 999) end
+                        if rawget(v, "Clip") and type(v.Clip) == "number" then rawset(v, "Clip", 999) end
+                        if rawget(v, "clip") and type(v.clip) == "number" then rawset(v, "clip", 999) end
                         if rawget(v, "MaxAmmo") and type(v.MaxAmmo) == "number" then rawset(v, "MaxAmmo", 999) end
+                        if rawget(v, "maxAmmo") and type(v.maxAmmo) == "number" then rawset(v, "maxAmmo", 999) end
+                        if rawget(v, "CurrentAmmo") and type(v.CurrentAmmo) == "number" then rawset(v, "CurrentAmmo", 999) end
+                        if rawget(v, "currentAmmo") and type(v.currentAmmo) == "number" then rawset(v, "currentAmmo", 999) end
                     end)
                 end
                 if Config.RapidFire.Enabled then
@@ -492,38 +542,86 @@ RunService.Heartbeat:Connect(function()
 
     local Char = LocalPlayer.Character
     if not Char then return end
-    local tool = Char:FindFirstChildWhichIsA("Tool") or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
-    if not tool then return end
-
-    -- Brute-force local IntValues and Attributes
-    for _, v in ipairs(tool:GetDescendants()) do
-        if Config.InfiniteAmmo.Enabled then
-            if v:IsA("IntValue") or v:IsA("NumberValue") then
-                local n = string.lower(v.Name)
-                if n:find("ammo") or n:find("mag") or n:find("clip") then
-                    pcall(function() if v.Value < 999 then v.Value = 999 end end)
+    
+    -- Check both equipped tool and all tools in backpack
+    local tools = {}
+    local equippedTool = Char:FindFirstChildWhichIsA("Tool")
+    if equippedTool then table.insert(tools, equippedTool) end
+    
+    for _, tool in pairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") then table.insert(tools, tool) end
+    end
+    
+    if #tools == 0 then return end
+    
+    -- Process all tools
+    for _, tool in pairs(tools) do
+        -- Brute-force local IntValues and Attributes
+        for _, v in ipairs(tool:GetDescendants()) do
+            if Config.InfiniteAmmo.Enabled then
+                if v:IsA("IntValue") or v:IsA("NumberValue") then
+                    local n = string.lower(v.Name)
+                    if n:find("ammo") or n:find("mag") or n:find("clip") or n:find("bullet") or n:find("round") or n:find("cartridge") then
+                        pcall(function() 
+                            if v.Value < 999 then 
+                                v.Value = 999 
+                            end 
+                        end)
+                    end
+                end
+                for attrName, attrValue in pairs(v:GetAttributes()) do
+                    local n = string.lower(attrName)
+                    if n:find("ammo") or n:find("mag") or n:find("clip") or n:find("bullet") or n:find("round") or n:find("cartridge") then
+                        pcall(function() 
+                            if type(attrValue) == "number" and attrValue < 999 then
+                                v:SetAttribute(attrName, 999) 
+                            end
+                        end)
+                    end
                 end
             end
-            for attrName, _ in pairs(v:GetAttributes()) do
-                local n = string.lower(attrName)
-                if n:find("ammo") or n:find("mag") or n:find("clip") then
-                    pcall(function() v:SetAttribute(attrName, 999) end)
+            if Config.RapidFire.Enabled then
+                if v:IsA("NumberValue") then
+                    local n = string.lower(v.Name)
+                    if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
+                        pcall(function() v.Value = 0.01 end)
+                    end
+                end
+                for attrName, attrValue in pairs(v:GetAttributes()) do
+                    if type(attrValue) == "number" then
+                        local n = string.lower(attrName)
+                        if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
+                            pcall(function() v:SetAttribute(attrName, 0.01) end)
+                        end
+                    end
                 end
             end
         end
-        if Config.RapidFire.Enabled then
-            if v:IsA("NumberValue") then
-                local n = string.lower(v.Name)
-                if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
-                    pcall(function() v.Value = 0.01 end)
+        
+        -- Direct tool values and attributes (for games that store ammo directly on tool)
+        if Config.InfiniteAmmo.Enabled then
+            for _, v in ipairs(tool:GetChildren()) do
+                if v:IsA("IntValue") or v:IsA("NumberValue") then
+                    local n = string.lower(v.Name)
+                    if n:find("ammo") or n:find("mag") or n:find("clip") or n:find("bullet") or n:find("round") or n:find("cartridge") then
+                        pcall(function() 
+                            if v.Value < 999 then 
+                                v.Value = 999 
+                            end 
+                        end)
+                    end
                 end
             end
-            for attrName, attrValue in pairs(v:GetAttributes()) do
-                if type(attrValue) == "number" then
-                    local n = string.lower(attrName)
-                    if n:find("firerate") or n:find("delay") or n:find("cooldown") or n:find("debounce") then
-                        pcall(function() v:SetAttribute(attrName, 0.01) end)
-                    end
+            
+            -- Check tool attributes directly
+            for attrName, attrValue in pairs(tool:GetAttributes()) do
+                local n = string.lower(attrName)
+                if n:find("ammo") or n:find("mag") or n:find("clip") or n:find("bullet") or n:find("round") or n:find("cartridge") then
+                    pcall(function() 
+                        if type(attrValue) == "number" and attrValue < 999 then
+                            tool:SetAttribute(attrName, 999) 
+                        end
+                    end)
                 end
             end
         end
@@ -674,6 +772,7 @@ local TPAuraToggle   = MakeButton("TP Aura [OFF]")
 local EnemyTPToggle  = MakeButton("Enemy TP Aura [OFF]")
 local KnifeAuraToggle = MakeButton("Knife Aura [OFF]")
 local FlyToggle      = MakeButton("Fly [OFF]")
+local FlyModeBtn     = MakeButton("Fly Mode: Normal", Color3.fromRGB(255, 200, 50))
 local NoclipToggle   = MakeButton("Noclip [OFF]")
 local InfJumpToggle  = MakeButton("Inf. Jump [OFF]")
 local InfAmmoToggle  = MakeButton("Inf. Ammo [OFF]")
@@ -744,6 +843,16 @@ HitboxToggle.MouseButton1Click:Connect(function()
     HitboxIndex = (HitboxIndex % #Hitboxes) + 1
     Config.Aimbot.TargetPart = Hitboxes[HitboxIndex]
     HitboxToggle.Text = "Hitbox: " .. Hitboxes[HitboxIndex]
+end)
+
+-- Fly Mode
+FlyModeBtn.MouseButton1Click:Connect(function()
+    if Config.Fly.Mode == "Normal" then
+        Config.Fly.Mode = "Slide"
+    else
+        Config.Fly.Mode = "Normal"
+    end
+    FlyModeBtn.Text = "Fly Mode: " .. Config.Fly.Mode
 end)
 
 -- Fly
@@ -911,6 +1020,12 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
             Config.Aimbot.Key = Enum.UserInputType.MouseButton3
             Config.Aimbot.KeyName = "MMB"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton4 then
+            Config.Aimbot.Key = Enum.UserInputType.MouseButton4
+            Config.Aimbot.KeyName = "Mouse4"
+        elseif input.UserInputType == Enum.UserInputType.MouseButton5 then
+            Config.Aimbot.Key = Enum.UserInputType.MouseButton5
+            Config.Aimbot.KeyName = "Mouse5"
         elseif string.find(tostring(input.UserInputType), "MouseButton") then
             Config.Aimbot.Key = input.UserInputType
             Config.Aimbot.KeyName = tostring(input.UserInputType):gsub("Enum.UserInputType.", "")
@@ -923,12 +1038,12 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         return
     end
 
-    if not gpe then
-        if input.UserInputType == Config.Aimbot.Key or input.KeyCode == Config.Aimbot.Key then
-            isAimKeyDown = true
-            if Config.Aimbot.Mode == "Toggle" then
-                aimbotToggled = not aimbotToggled
-            end
+    -- We ignore 'gpe' for Aimbot because clicking on the game screen/camera 
+    -- often sets gpe to true, which breaks MouseButton Aiming.
+    if input.UserInputType == Config.Aimbot.Key or input.KeyCode == Config.Aimbot.Key then
+        isAimKeyDown = true
+        if Config.Aimbot.Mode == "Toggle" then
+            aimbotToggled = not aimbotToggled
         end
     end
 end)
