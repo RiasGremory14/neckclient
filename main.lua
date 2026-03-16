@@ -70,22 +70,33 @@ local aimbotToggled = false
 -- ════════════════════════════════════════
 --  AIMBOT CORE
 -- ════════════════════════════════════════
-local _cachedTarget     = nil   -- cached BasePart (aim part)
-local _cachedPlayer     = nil   -- cached Player for sticky aim
-local _stickyTimer      = 0     -- how long to hold last target after losing sight
-local STICKY_DURATION   = 0.25  -- seconds to keep last target
+local _cachedTarget  = nil
+local _cachedPlayer  = nil
+local _stickyTimer   = 0
+local STICKY_DURATION = 0.3
 
--- Predict target position using real velocity + ping compensation
-local function PredictPosition(aimPart, dt)
-    local ping = LocalPlayer.Character and LocalPlayer:GetNetworkPing() or 0
+-- Smoothed velocity per player (reduces jitter from AssemblyLinearVelocity noise)
+local _velSmooth = {}  -- [Player] = Vector3
+
+local function GetSmoothedVelocity(player, root, dt)
+    local raw = root.AssemblyLinearVelocity
+    local prev = _velSmooth[player] or raw
+    -- Low-pass filter: alpha 0.35 = responsive but not jittery
+    local smoothed = prev:Lerp(raw, math.min(1, dt * 18))
+    _velSmooth[player] = smoothed
+    return smoothed
+end
+
+-- Predict target position: velocity + ping compensation
+local function PredictPosition(aimPart, player, dt)
+    local ping = LocalPlayer:GetNetworkPing()
     local totalTime = Config.Aimbot.Prediction + ping
 
-    -- Prefer AssemblyLinearVelocity (physics-accurate) over MoveDirection
     local vel = Vector3.zero
     local root = aimPart.Parent and aimPart.Parent:FindFirstChild("HumanoidRootPart")
     if root then
-        vel = root.AssemblyLinearVelocity
-        -- Zero out vertical if target is grounded (reduces over-prediction)
+        vel = GetSmoothedVelocity(player, root, dt)
+        -- Suppress vertical velocity when grounded (no over-prediction on jumps)
         local hum = aimPart.Parent:FindFirstChild("Humanoid")
         if hum and hum.FloorMaterial ~= Enum.Material.Air then
             vel = Vector3.new(vel.X, 0, vel.Z)
@@ -95,98 +106,140 @@ local function PredictPosition(aimPart, dt)
     return aimPart.Position + (vel * totalTime) + Config.Aimbot.AimOffset
 end
 
--- Compute closest player, called once per frame
-local function ComputeClosestPlayer()
-    local bestPart   = nil
-    local bestPlayer = nil
+-- Compute closest player using predicted screen position
+local function ComputeClosestPlayer(dt)
+    local bestPart    = nil
+    local bestPlayer  = nil
     local closestDist = math.huge
-    local MousePos = UserInputService:GetMouseLocation()
-    local center   = Vector2.new(MousePos.X, MousePos.Y - 36)
-    local camPos   = Camera.CFrame.Position
+    local mouseLoc    = UserInputService:GetMouseLocation()
+    local camPos      = Camera.CFrame.Position
 
     for _, Player in pairs(Players:GetPlayers()) do
         if Player == LocalPlayer or not Player.Character then continue end
-        -- HeadHB = custom hitbox used in some FPS games (e.g. Arsenal), prioritize it
-        local aimPart = Player.Character:FindFirstChild("HeadHB")
-            or Player.Character:FindFirstChild(Config.Aimbot.TargetPart)
-            or Player.Character:FindFirstChild("HumanoidRootPart")
-        if not aimPart then continue end
         local hum = Player.Character:FindFirstChild("Humanoid")
         if not hum or hum.Health <= 0 then continue end
         if Config.TeamCheck and Player.Team == LocalPlayer.Team then continue end
 
-        local ScreenPoint, OnScreen = Camera:WorldToViewportPoint(aimPart.Position)
-        if not OnScreen then continue end
+        local aimPart = Player.Character:FindFirstChild("HeadHB")
+            or Player.Character:FindFirstChild(Config.Aimbot.TargetPart)
+            or Player.Character:FindFirstChild("HumanoidRootPart")
+        if not aimPart then continue end
 
-        local screenPos = Vector2.new(ScreenPoint.X, ScreenPoint.Y)
-        local screenDist = (center - screenPos).Magnitude
+        -- Use predicted position for target selection (more accurate lock-on)
+        local predictedPos = PredictPosition(aimPart, Player, dt)
+        local screenPt, onScreen = Camera:WorldToViewportPoint(predictedPos)
+        if not onScreen then continue end
+
+        local screenDist = (Vector2.new(screenPt.X, screenPt.Y) - mouseLoc).Magnitude
         if screenDist > Config.Aimbot.Radius then continue end
 
-        -- Weight: screen distance + slight world distance bias (prefer closer enemies)
-        local worldDist = (aimPart.Position - camPos).Magnitude
-        local weighted  = screenDist + (worldDist * 0.008)
+        -- Weighted: screen dist is primary, world dist is tiebreaker
+        local worldDist = (predictedPos - camPos).Magnitude
+        local weighted  = screenDist + (worldDist * 0.006)
 
         if weighted < closestDist then
-            bestPart   = aimPart
-            bestPlayer = Player
+            bestPart    = aimPart
+            bestPlayer  = Player
             closestDist = weighted
         end
     end
 
     if bestPart then
+        -- New target found: reset sticky
+        if bestPlayer ~= _cachedPlayer then
+            _stickyTimer = STICKY_DURATION
+        end
         _cachedTarget = bestPart
         _cachedPlayer = bestPlayer
         _stickyTimer  = STICKY_DURATION
+    else
+        -- No target in FOV: count down sticky timer
+        _stickyTimer = _stickyTimer - dt
+        if _stickyTimer <= 0 then
+            _cachedTarget = nil
+            _cachedPlayer = nil
+            _velSmooth[_cachedPlayer] = nil
+        else
+            -- Validate sticky target is still alive
+            if _cachedPlayer and _cachedPlayer.Character then
+                local h = _cachedPlayer.Character:FindFirstChild("Humanoid")
+                if not h or h.Health <= 0 then
+                    _cachedTarget = nil
+                    _cachedPlayer = nil
+                end
+            end
+        end
     end
 end
 
 -- ════════════════════════════════════════
---  SILENT AIM
+--  SILENT AIM (BulletModule hook)
 -- ════════════════════════════════════════
+local function SA_IsVisible(part)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {char, Camera}
+    local result = workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, params)
+    return result == nil or result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function SA_GetTarget()
+    local closest = nil
+    local shortestDist = Config.Aimbot.Radius
+    local mousePos = UserInputService:GetMouseLocation()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer or not p.Character then continue end
+        local hum = p.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        if Config.TeamCheck and p.Team == LocalPlayer.Team then continue end
+        local part = p.Character:FindFirstChild(Config.Aimbot.TargetPart)
+            or p.Character:FindFirstChild("Head")
+        if not part then continue end
+        local pos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        local dist = (Vector2.new(pos.X, pos.Y) - mousePos).Magnitude
+        if dist < shortestDist then
+            shortestDist = dist
+            closest = p.Character
+        end
+    end
+    return closest
+end
+
 pcall(function()
-    local mt = getrawmetatable(game)
-    local oldNamecall = mt.__namecall
-    setreadonly(mt, false)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local BulletModule = ReplicatedStorage:WaitForChild("Components", 5)
+        and ReplicatedStorage.Components:WaitForChild("Weapon", 5)
+        and ReplicatedStorage.Components.Weapon:WaitForChild("Classes", 5)
+        and ReplicatedStorage.Components.Weapon.Classes:WaitForChild("Bullet", 5)
+    if not BulletModule then return end
 
-    mt.__namecall = newcclosure(function(self, ...)
-        local method = getnamecallmethod()
+    local Bullet = require(BulletModule)
+    local realMath = math
 
-        if Config.SilentAim.Enabled then
-            local target = _cachedTarget
-            if target then
-                local args = {...}
-                local predictedPos = target.Position
-                local humanoid = target.Parent:FindFirstChild("Humanoid")
-                if humanoid and humanoid.MoveDirection ~= Vector3.new(0,0,0) then
-                    predictedPos = target.Position + (humanoid.MoveDirection * humanoid.WalkSpeed * Config.Aimbot.Prediction)
-                end
-
-                if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
-                    local ray = args[1]
-                    if ray then
-                        local newDir = (predictedPos - Camera.CFrame.Position).Unit * ray.Direction.Magnitude
-                        args[1] = Ray.new(Camera.CFrame.Position, newDir)
-                        return oldNamecall(self, table.unpack(args))
+    getfenv(Bullet._performRaycast).math = setmetatable({}, {
+        __index = function(_, index)
+            if index == "min" and Config.SilentAim.Enabled then
+                local target = SA_GetTarget()
+                if target then
+                    if math.random(1, 100) <= 100 then
+                        local part = target:FindFirstChild(Config.Aimbot.TargetPart)
+                            or target:FindFirstChild("Head")
+                        if part then
+                            debug.setstack(2, 5, Ray.new(
+                                Camera.CFrame.Position,
+                                (part.Position - Camera.CFrame.Position).Unit
+                            ))
+                            return function() return 0 end
+                        end
                     end
-                elseif method == "Raycast" then
-                    local newDir = (predictedPos - Camera.CFrame.Position).Unit
-                    local len = args[2] and args[2].Magnitude or 1000
-                    args[1] = Camera.CFrame.Position
-                    args[2] = newDir * len
-                    return oldNamecall(self, table.unpack(args))
-                elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
-                    local sp = Camera:WorldToScreenPoint(predictedPos)
-                    args[1] = sp.X
-                    args[2] = sp.Y
-                    return oldNamecall(self, table.unpack(args))
                 end
             end
+            return realMath[index]
         end
-
-        return oldNamecall(self, ...)
-    end)
-
-    setreadonly(mt, true)
+    })
 end)
 
 -- ════════════════════════════════════════
@@ -287,54 +340,37 @@ for _, p in pairs(Players:GetPlayers()) do
 end
 
 -- ════════════════════════════════════════
---  MAIN RENDER LOOP (aimbot + FOV + visuals)
+--  MAIN RENDER LOOP (aimbot + FOV)
 -- ════════════════════════════════════════
 RunService.RenderStepped:Connect(function(dt)
-    -- 1. Refresh target cache every frame
-    ComputeClosestPlayer()
-
-    -- Sticky aim: keep last target briefly after losing sight
-    if not _cachedTarget and _cachedPlayer then
-        _stickyTimer = _stickyTimer - dt
-        if _stickyTimer > 0 and _cachedPlayer.Character then
-            local part = _cachedPlayer.Character:FindFirstChild(Config.Aimbot.TargetPart)
-                or _cachedPlayer.Character:FindFirstChild("HumanoidRootPart")
-            local hum = _cachedPlayer.Character:FindFirstChild("Humanoid")
-            if part and hum and hum.Health > 0 then
-                _cachedTarget = part
-            end
-        else
-            _cachedPlayer = nil
-            _stickyTimer  = 0
-        end
-    end
+    -- 1. Refresh target cache (includes sticky aim logic)
+    ComputeClosestPlayer(dt)
 
     -- 2. FOV circle
     FOVCircle.Visible  = Config.Aimbot.Enabled and Config.Aimbot.ShowFOV
     FOVCircle.Radius   = Config.Aimbot.Radius
     FOVCircle.Position = UserInputService:GetMouseLocation()
 
-    -- 3. mousemoverel aimbot (undetectable, no CFrame manipulation)
+    -- 3. mousemoverel aimbot
     local aimbotActive = (Config.Aimbot.Mode == "Hold") and isAimKeyDown or aimbotToggled
-    if Config.Aimbot.Enabled and aimbotActive and _cachedTarget and mousemoverel then
-        local target = _cachedTarget
-        local predictedPos = PredictPosition(target, dt)
-
-        -- Project predicted world position to screen
+    if Config.Aimbot.Enabled and aimbotActive and _cachedTarget and _cachedPlayer and mousemoverel then
+        local predictedPos = PredictPosition(_cachedTarget, _cachedPlayer, dt)
         local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
         if onScreen then
             local mouseLoc = UserInputService:GetMouseLocation()
-
-            -- Delta between target screen pos and current mouse pos
             local dx = screenPos.X - mouseLoc.X
             local dy = screenPos.Y - mouseLoc.Y
 
-            -- Smoothness: 0 = instant, 10 = very slow
-            -- dt-based exponential so it's frame-rate independent
+            -- Exponential smooth, frame-rate independent via dt
+            -- smooth=0 → instant, smooth=10 → very slow
             local smooth = Config.Aimbot.Smoothness
             local factor = smooth <= 0 and 1 or (1 - math.exp(-dt * (11 - smooth) * 6))
 
-            mousemoverel(dx * factor, dy * factor)
+            -- Dead zone: skip tiny corrections to avoid micro-jitter
+            local dist = math.sqrt(dx*dx + dy*dy)
+            if dist > 0.5 then
+                mousemoverel(dx * factor, dy * factor)
+            end
         end
     end
 end)
