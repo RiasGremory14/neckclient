@@ -342,9 +342,7 @@ RunService.RenderStepped:Connect(function(dt)
     -- 2. FOV circle
     FOVCircle.Visible  = Config.Aimbot.Enabled and Config.Aimbot.ShowFOV
     FOVCircle.Radius   = Config.Aimbot.Radius
-    local mouse = UserInputService:GetMouseLocation()
-    local inset = game:GetService("GuiService"):GetGuiInset()
-    FOVCircle.Position = Vector2.new(mouse.X, mouse.Y - inset.Y)
+    FOVCircle.Position = UserInputService:GetMouseLocation()
 
     -- 3. mousemoverel aimbot
     local aimbotActive = (Config.Aimbot.Mode == "Hold") and isAimKeyDown or aimbotToggled
