@@ -13,14 +13,7 @@ local Camera = workspace.CurrentCamera
 local Hitboxes = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso"}
 local HitboxIndex = 1
 
-local ChamsColors = {
-    {fill = Color3.fromRGB(255, 50, 50),  outline = Color3.fromRGB(255,255,255)},
-    {fill = Color3.fromRGB(50, 200, 255), outline = Color3.fromRGB(0, 100, 200)},
-    {fill = Color3.fromRGB(50, 255, 100), outline = Color3.fromRGB(255,255,255)},
-    {fill = Color3.fromRGB(255, 150, 0),  outline = Color3.fromRGB(255,255,0)},
-    {fill = Color3.fromRGB(180, 0, 255),  outline = Color3.fromRGB(255,100,255)},
-    {fill = Color3.fromRGB(255, 255, 255),outline = Color3.fromRGB(0, 0, 0)},
-}
+local ChamsColors = {}  -- preset system removed, custom color used
 local ChamsColorIndex = 1
 
 local Config = {
@@ -41,8 +34,8 @@ local Config = {
     TeamCheck = true,
     Chams     = {
         Enabled = false,
-        FillColor    = ChamsColors[ChamsColorIndex].fill,
-        OutlineColor = ChamsColors[ChamsColorIndex].outline,
+        FillColor    = Color3.fromRGB(255, 50, 50),
+        OutlineColor = Color3.fromRGB(255, 255, 255),
     },
     Fly           = { Enabled = false, Speed = 60, Mode = "Normal" },
     Noclip        = { Enabled = false },
@@ -643,11 +636,36 @@ Gradient.Parent = MainFrame
 local Title = Instance.new("TextLabel")
 Title.Parent = MainFrame
 Title.BackgroundTransparency = 1
-Title.Size = UDim2.new(1, 0, 0, 45)
+Title.Size = UDim2.new(1, -80, 0, 45)
 Title.Font = Enum.Font.GothamBold
 Title.Text = "OG'S TUFF SCRIPT"
 Title.TextColor3 = Color3.fromRGB(255,255,255)
 Title.TextSize = 20
+
+-- Menu keybind display (top-left of title bar)
+local MenuKeyLabel = Instance.new("TextLabel")
+MenuKeyLabel.Parent = MainFrame
+MenuKeyLabel.BackgroundTransparency = 1
+MenuKeyLabel.Position = UDim2.new(0, 8, 0, 0)
+MenuKeyLabel.Size = UDim2.new(0, 80, 0, 45)
+MenuKeyLabel.Font = Enum.Font.GothamMedium
+MenuKeyLabel.Text = "[P]"
+MenuKeyLabel.TextColor3 = Color3.fromRGB(0,170,255)
+MenuKeyLabel.TextSize = 13
+MenuKeyLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Unload button (top-right)
+local UnloadBtn = Instance.new("TextButton")
+UnloadBtn.Parent = MainFrame
+UnloadBtn.BackgroundColor3 = Color3.fromRGB(180,30,30)
+UnloadBtn.Position = UDim2.new(1, -38, 0, 8)
+UnloadBtn.Size = UDim2.new(0, 30, 0, 28)
+UnloadBtn.Font = Enum.Font.GothamBold
+UnloadBtn.Text = "✕"
+UnloadBtn.TextColor3 = Color3.fromRGB(255,255,255)
+UnloadBtn.TextSize = 14
+UnloadBtn.BorderSizePixel = 0
+UICorner:Clone().Parent = UnloadBtn
 
 local Sep = Instance.new("Frame")
 Sep.Parent = MainFrame
@@ -737,7 +755,8 @@ local AimbotKeyBtn      = MakeButton("Aim Key: RMB",         Color3.fromRGB(255,
 local SilentToggle      = MakeButton("Silent Aim [OFF]")
 local ESPToggle         = MakeButton("ESP [OFF]")
 local ChamsToggle       = MakeButton("Chams [OFF]")
-local ChamsColorBtn     = MakeButton("Chams Color: Red/White",Color3.fromRGB(255,200,50))
+local ChamsColorBtn     = MakeButton("Fill: 255,50,50",   Color3.fromRGB(255,200,50))
+local ChamsOutlineBtn   = MakeButton("Outline: 255,255,255", Color3.fromRGB(255,200,50))
 local HitboxToggle      = MakeButton("Hitbox: Head",         Color3.fromRGB(255,200,50))
 local TPAuraToggle      = MakeButton("TP Aura [OFF]")
 local EnemyTPToggle     = MakeButton("Enemy TP Aura [OFF]")
@@ -750,6 +769,10 @@ local InfAmmoToggle     = MakeButton("Inf. Ammo [OFF]")
 local RapidFireToggle   = MakeButton("Rapid Fire [OFF]")
 local MagicBulletToggle = MakeButton("Magic Bullet [OFF]")
 local TeamCheckToggle   = MakeButton("Team Check [ON]", Color3.fromRGB(50,255,100))
+local MenuKeyBtn        = MakeButton("Menu Key: P",     Color3.fromRGB(255,200,50))
+local SaveConfigBtn     = MakeButton("Save Config",     Color3.fromRGB(50,200,100))
+local LoadConfigBtn     = MakeButton("Load Config",     Color3.fromRGB(50,150,255))
+local UnloadToggle      = MakeButton("Unload Script",   Color3.fromRGB(255,80,80))
 
 local FOVLabel,      FOVMinus,      FOVPlus      = MakeSliderRow("FOV: 150")
 local SmoothLabel,   SmoothMinus,   SmoothPlus   = MakeSliderRow("Smooth: 5")
@@ -789,19 +812,24 @@ ChamsToggle.MouseButton1Click:Connect(function()
     RefreshAllVisuals()
 end)
 
-local ChamsColorNames = {"Red/White","Cyan/Blue","Green/White","Orange/Yellow","Purple/Pink","White/Black"}
-ChamsColorBtn.MouseButton1Click:Connect(function()
-    ChamsColorIndex = (ChamsColorIndex % #ChamsColors) + 1
-    local c = ChamsColors[ChamsColorIndex]
-    Config.Chams.FillColor    = c.fill
-    Config.Chams.OutlineColor = c.outline
-    ChamsColorBtn.Text = "Chams Color: " .. ChamsColorNames[ChamsColorIndex]
-    TweenService:Create(ChamsColorBtn, TweenInfo.new(0.2), {BackgroundColor3 = c.fill}):Play()
-    task.delay(0.4, function()
-        TweenService:Create(ChamsColorBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+-- Chams custom color picker (fill + outline, RGB sliders)
+local fillRGB    = {R=255, G=50,  B=50}
+local outlineRGB = {R=255, G=255, B=255}
+local chamsEditTarget = "fill"
+
+local function applyChamsColors()
+    Config.Chams.FillColor    = Color3.fromRGB(fillRGB.R,    fillRGB.G,    fillRGB.B)
+    Config.Chams.OutlineColor = Color3.fromRGB(outlineRGB.R, outlineRGB.G, outlineRGB.B)
+    ChamsColorBtn.Text   = ("Fill: %d,%d,%d"):format(fillRGB.R, fillRGB.G, fillRGB.B)
+    ChamsOutlineBtn.Text = ("Outline: %d,%d,%d"):format(outlineRGB.R, outlineRGB.G, outlineRGB.B)
+    TweenService:Create(ChamsColorBtn,   TweenInfo.new(0.15), {BackgroundColor3 = Config.Chams.FillColor}):Play()
+    TweenService:Create(ChamsOutlineBtn, TweenInfo.new(0.15), {BackgroundColor3 = Config.Chams.OutlineColor}):Play()
+    task.delay(0.35, function()
+        TweenService:Create(ChamsColorBtn,   TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+        TweenService:Create(ChamsOutlineBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
     end)
     RefreshAllVisuals()
-end)
+end
 
 HitboxToggle.MouseButton1Click:Connect(function()
     HitboxIndex = (HitboxIndex % #Hitboxes) + 1
@@ -934,37 +962,136 @@ PredPlus.MouseButton1Click:Connect(function()
 end)
 
 -- Key binding
-local bindingKey = false
+-- Menu keybind (default P)
+local menuKey = Enum.KeyCode.P
+local bindingMenuKey = false
+
+-- Unload: disconnect everything and destroy GUI
+local _connections = {}  -- tüm RunService/UIS bağlantıları buraya kaydedilecek (mevcut kodda retroaktif değil, GUI destroy yeterli)
+local function Unload()
+    -- Disable all features
+    Config.Aimbot.Enabled   = false
+    Config.SilentAim.Enabled = false
+    Config.ESP.Enabled      = false
+    Config.Chams.Enabled    = false
+    Config.Fly.Enabled      = false
+    Config.Noclip.Enabled   = false
+    Config.TPAura.Enabled   = false
+    Config.EnemyTPAura.Enabled = false
+    Config.KnifeAura.Enabled = false
+    Config.InfiniteJump.Enabled = false
+    Config.InfiniteAmmo.Enabled = false
+    Config.RapidFire.Enabled = false
+    Config.MagicBullet.Enabled = false
+    -- Clean up visuals
+    RefreshAllVisuals()
+    FOVCircle.Visible = false
+    -- Restore fly/noclip state
+    local Char = LocalPlayer.Character
+    if Char then
+        local root = Char:FindFirstChild("HumanoidRootPart")
+        local hum  = Char:FindFirstChild("Humanoid")
+        if root then
+            local bv = root:FindFirstChild("FlyBodyVel")
+            local bg = root:FindFirstChild("FlyBodyGyro")
+            if bv then bv:Destroy() end
+            if bg then bg:Destroy() end
+        end
+        if hum then hum.PlatformStand = false end
+    end
+    -- Destroy GUI
+    ScreenGui:Destroy()
+    print("OG's Tuff Script unloaded.")
+end
+
+UnloadBtn.MouseButton1Click:Connect(Unload)
+UnloadToggle.MouseButton1Click:Connect(Unload)
+
+-- Menu key binding
+local bindingMenuKeyConn = nil
+MenuKeyBtn.MouseButton1Click:Connect(function()
+    if bindingMenuKey then return end
+    bindingMenuKey = true
+    MenuKeyBtn.Text = "Press any key..."
+    TweenService:Create(MenuKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180,100,0)}):Play()
+end)
+
+local MOUSE_BUTTONS = {
+    Enum.UserInputType.MouseButton1,
+    Enum.UserInputType.MouseButton2,
+    Enum.UserInputType.MouseButton3,
+    Enum.UserInputType.MouseButton4,
+    Enum.UserInputType.MouseButton5,
+}
+local MOUSE_NAMES = {
+    [Enum.UserInputType.MouseButton1] = "LMB",
+    [Enum.UserInputType.MouseButton2] = "RMB",
+    [Enum.UserInputType.MouseButton3] = "MMB",
+    [Enum.UserInputType.MouseButton4] = "Mouse4",
+    [Enum.UserInputType.MouseButton5] = "Mouse5",
+}
+
 AimbotKeyBtn.MouseButton1Click:Connect(function()
     if bindingKey then return end
     bindingKey = true
     AimbotKeyBtn.Text = "Press any key..."
     TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180,100,0)}):Play()
+
+    -- Mouse4/5 don't fire InputBegan, poll for all mouse buttons here
+    if bindingPollConn then bindingPollConn:Disconnect() end
+    bindingPollConn = RunService.RenderStepped:Connect(function()
+        if not bindingKey then
+            bindingPollConn:Disconnect(); bindingPollConn = nil; return
+        end
+        for _, btn in ipairs(MOUSE_BUTTONS) do
+            if UserInputService:IsMouseButtonPressed(btn) then
+                bindingKey = false
+                Config.Aimbot.Key = btn
+                Config.Aimbot.KeyName = MOUSE_NAMES[btn]
+                AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
+                TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+                bindingPollConn:Disconnect(); bindingPollConn = nil; return
+            end
+        end
+    end)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
-    if not gpe and input.KeyCode == Enum.KeyCode.P then
+    -- Menu toggle
+    if not gpe and input.KeyCode == menuKey then
         MainFrame.Visible = not MainFrame.Visible
         return
     end
-    if bindingKey then
-        bindingKey = false
-        if input.UserInputType ~= Enum.UserInputType.Keyboard then
-            Config.Aimbot.Key = input.UserInputType
-            Config.Aimbot.KeyName = tostring(input.UserInputType):gsub("Enum.UserInputType.","")
-        elseif input.KeyCode ~= Enum.KeyCode.Unknown then
-            Config.Aimbot.Key = input.KeyCode
-            Config.Aimbot.KeyName = tostring(input.KeyCode):gsub("Enum.KeyCode.","")
+    -- Menu key binding
+    if bindingMenuKey and input.UserInputType == Enum.UserInputType.Keyboard then
+        if input.KeyCode ~= Enum.KeyCode.Unknown then
+            bindingMenuKey = false
+            menuKey = input.KeyCode
+            local keyName = tostring(input.KeyCode):gsub("Enum.KeyCode.","")
+            MenuKeyBtn.Text = "Menu Key: " .. keyName
+            MenuKeyLabel.Text = "[" .. keyName .. "]"
+            TweenService:Create(MenuKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
         end
-        AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
-        TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
         return
     end
-    if (Config.Aimbot.Key and input.UserInputType == Config.Aimbot.Key)
-    or (Config.Aimbot.Key and input.KeyCode == Config.Aimbot.Key) then
-        isAimKeyDown = true
-        if Config.Aimbot.Mode == "Toggle" then
-            aimbotToggled = not aimbotToggled
+    -- Keyboard-only binding (mouse is handled by poll above)
+    if bindingKey and input.UserInputType == Enum.UserInputType.Keyboard then
+        if input.KeyCode ~= Enum.KeyCode.Unknown then
+            bindingKey = false
+            Config.Aimbot.Key = input.KeyCode
+            Config.Aimbot.KeyName = tostring(input.KeyCode):gsub("Enum.KeyCode.","")
+            AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
+            TweenService:Create(AimbotKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+        end
+        return
+    end
+    if not bindingKey then
+        if (Config.Aimbot.Key and input.UserInputType == Config.Aimbot.Key)
+        or (Config.Aimbot.Key and input.KeyCode == Config.Aimbot.Key) then
+            isAimKeyDown = true
+            if Config.Aimbot.Mode == "Toggle" then
+                aimbotToggled = not aimbotToggled
+            end
         end
     end
 end)
@@ -976,7 +1103,405 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
+-- Mouse4/5 hold state via polling (InputBegan/Ended doesn't fire for them in Roblox)
+RunService.RenderStepped:Connect(function()
+    if not Config.Aimbot.Enabled or Config.Aimbot.Mode ~= "Hold" then return end
+    if Config.Aimbot.Key == Enum.UserInputType.MouseButton4
+    or Config.Aimbot.Key == Enum.UserInputType.MouseButton5 then
+        isAimKeyDown = UserInputService:IsMouseButtonPressed(Config.Aimbot.Key)
+    end
+end)
+
+-- ════════════════════════════════════════
+--  HEX COLOR INPUT POPUP
+-- ════════════════════════════════════════
+
+-- Parse RRGGBB or RRGGBBAA hex string → Color3 (alpha ignored)
+local function hexToColor3(hex)
+    hex = hex:gsub("^#",""):upper()
+    if #hex == 6 or #hex == 8 then
+        local r = tonumber(hex:sub(1,2), 16)
+        local g = tonumber(hex:sub(3,4), 16)
+        local b = tonumber(hex:sub(5,6), 16)
+        if r and g and b then
+            return Color3.fromRGB(r, g, b)
+        end
+    end
+    return nil
+end
+
+local function color3ToHex(c)
+    return ("%02X%02X%02X"):format(
+        math.floor(c.R * 255),
+        math.floor(c.G * 255),
+        math.floor(c.B * 255)
+    )
+end
+
+local HexPopup = Instance.new("Frame")
+HexPopup.Parent = ScreenGui
+HexPopup.BackgroundColor3 = Color3.fromRGB(22,22,22)
+HexPopup.BorderSizePixel = 0
+HexPopup.Size = UDim2.new(0, 240, 0, 100)
+HexPopup.Position = UDim2.new(0.5, -120, 0, 390)
+HexPopup.Visible = false
+UICorner:Clone().Parent = HexPopup
+
+local HPTitle = Instance.new("TextLabel")
+HPTitle.Parent = HexPopup
+HPTitle.BackgroundTransparency = 1
+HPTitle.Position = UDim2.new(0, 10, 0, 0)
+HPTitle.Size = UDim2.new(1, -40, 0, 28)
+HPTitle.Font = Enum.Font.GothamBold
+HPTitle.Text = "Fill Color"
+HPTitle.TextColor3 = Color3.fromRGB(255,255,255)
+HPTitle.TextSize = 13
+HPTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local HPClose = Instance.new("TextButton")
+HPClose.Parent = HexPopup
+HPClose.BackgroundColor3 = Color3.fromRGB(180,30,30)
+HPClose.Position = UDim2.new(1,-28,0,4)
+HPClose.Size = UDim2.new(0,22,0,22)
+HPClose.Font = Enum.Font.GothamBold
+HPClose.Text = "✕"
+HPClose.TextColor3 = Color3.fromRGB(255,255,255)
+HPClose.TextSize = 12
+HPClose.BorderSizePixel = 0
+UICorner:Clone().Parent = HPClose
+HPClose.MouseButton1Click:Connect(function() HexPopup.Visible = false end)
+
+-- Preview swatch
+local HPPreview = Instance.new("Frame")
+HPPreview.Parent = HexPopup
+HPPreview.Position = UDim2.new(0, 10, 0, 30)
+HPPreview.Size = UDim2.new(0, 36, 0, 36)
+HPPreview.BorderSizePixel = 0
+HPPreview.BackgroundColor3 = Color3.fromRGB(255,50,50)
+UICorner:Clone().Parent = HPPreview
+
+-- # label
+local HPHash = Instance.new("TextLabel")
+HPHash.Parent = HexPopup
+HPHash.BackgroundTransparency = 1
+HPHash.Position = UDim2.new(0, 52, 0, 30)
+HPHash.Size = UDim2.new(0, 16, 0, 36)
+HPHash.Font = Enum.Font.GothamBold
+HPHash.Text = "#"
+HPHash.TextColor3 = Color3.fromRGB(0,170,255)
+HPHash.TextSize = 16
+
+-- Text input box
+local HPInput = Instance.new("TextBox")
+HPInput.Parent = HexPopup
+HPInput.BackgroundColor3 = Color3.fromRGB(38,38,38)
+HPInput.Position = UDim2.new(0, 68, 0, 34)
+HPInput.Size = UDim2.new(1, -80, 0, 28)
+HPInput.Font = Enum.Font.Code
+HPInput.Text = "FF3232"
+HPInput.TextColor3 = Color3.fromRGB(220,220,220)
+HPInput.TextSize = 14
+HPInput.ClearTextOnFocus = false
+HPInput.BorderSizePixel = 0
+UICorner:Clone().Parent = HPInput
+
+-- Apply button
+local HPApply = Instance.new("TextButton")
+HPApply.Parent = HexPopup
+HPApply.BackgroundColor3 = Color3.fromRGB(0,150,255)
+HPApply.Position = UDim2.new(0, 10, 0, 68)
+HPApply.Size = UDim2.new(1, -20, 0, 24)
+HPApply.Font = Enum.Font.GothamBold
+HPApply.Text = "Apply"
+HPApply.TextColor3 = Color3.fromRGB(255,255,255)
+HPApply.TextSize = 13
+HPApply.BorderSizePixel = 0
+UICorner:Clone().Parent = HPApply
+
+-- Live preview as user types
+HPInput:GetPropertyChangedSignal("Text"):Connect(function()
+    local col = hexToColor3(HPInput.Text)
+    if col then
+        HPPreview.BackgroundColor3 = col
+        HPInput.TextColor3 = Color3.fromRGB(220,220,220)
+    else
+        HPInput.TextColor3 = Color3.fromRGB(255,80,80)
+    end
+end)
+
+HPApply.MouseButton1Click:Connect(function()
+    local col = hexToColor3(HPInput.Text)
+    if not col then return end
+    if chamsEditTarget == "fill" then
+        Config.Chams.FillColor = col
+        fillRGB = {R=math.floor(col.R*255), G=math.floor(col.G*255), B=math.floor(col.B*255)}
+        ChamsColorBtn.Text = "Fill: #" .. color3ToHex(col)
+        TweenService:Create(ChamsColorBtn, TweenInfo.new(0.15), {BackgroundColor3 = col}):Play()
+        task.delay(0.35, function()
+            TweenService:Create(ChamsColorBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+        end)
+    else
+        Config.Chams.OutlineColor = col
+        outlineRGB = {R=math.floor(col.R*255), G=math.floor(col.G*255), B=math.floor(col.B*255)}
+        ChamsOutlineBtn.Text = "Outline: #" .. color3ToHex(col)
+        TweenService:Create(ChamsOutlineBtn, TweenInfo.new(0.15), {BackgroundColor3 = col}):Play()
+        task.delay(0.35, function()
+            TweenService:Create(ChamsOutlineBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+        end)
+    end
+    RefreshAllVisuals()
+    HexPopup.Visible = false
+end)
+
+local function openHexPopup(target)
+    chamsEditTarget = target
+    local currentCol = target == "fill" and Config.Chams.FillColor or Config.Chams.OutlineColor
+    HPTitle.Text = (target == "fill" and "Fill" or "Outline") .. " Color"
+    HPInput.Text = color3ToHex(currentCol)
+    HPPreview.BackgroundColor3 = currentCol
+    HexPopup.Visible = true
+end
+
+ChamsColorBtn.MouseButton1Click:Connect(function()   openHexPopup("fill") end)
+ChamsOutlineBtn.MouseButton1Click:Connect(function() openHexPopup("outline") end)
+
+-- ════════════════════════════════════════
+--  CONFIG SYSTEM
+-- ════════════════════════════════════════
+local CONFIG_FILE = "ogs_tuff_config.json"
+
+-- Serialize current state to a table
+local function buildConfigTable()
+    return {
+        Aimbot = {
+            Enabled    = Config.Aimbot.Enabled,
+            KeyName    = Config.Aimbot.KeyName,
+            Mode       = Config.Aimbot.Mode,
+            Radius     = Config.Aimbot.Radius,
+            Smoothness = Config.Aimbot.Smoothness,
+            Prediction = Config.Aimbot.Prediction,
+            TargetPart = Config.Aimbot.TargetPart,
+            HitboxIndex = HitboxIndex,
+        },
+        SilentAim   = Config.SilentAim.Enabled,
+        ESP         = Config.ESP.Enabled,
+        TeamCheck   = Config.TeamCheck,
+        Chams = {
+            Enabled      = Config.Chams.Enabled,
+            FillHex      = color3ToHex(Config.Chams.FillColor),
+            OutlineHex   = color3ToHex(Config.Chams.OutlineColor),
+        },
+        Fly = {
+            Enabled = Config.Fly.Enabled,
+            Speed   = Config.Fly.Speed,
+            Mode    = Config.Fly.Mode,
+        },
+        Noclip       = Config.Noclip.Enabled,
+        TPAura       = Config.TPAura.Enabled,
+        EnemyTPAura  = Config.EnemyTPAura.Enabled,
+        KnifeAura    = Config.KnifeAura.Enabled,
+        InfiniteJump = Config.InfiniteJump.Enabled,
+        InfiniteAmmo = Config.InfiniteAmmo.Enabled,
+        RapidFire    = Config.RapidFire.Enabled,
+        MagicBullet  = Config.MagicBullet.Enabled,
+        MenuKey      = tostring(menuKey):gsub("Enum.KeyCode.",""),
+        WalkSpeed    = currentSpeed,
+    }
+end
+
+-- Simple serialize: convert table to JSON-like string without external libs
+local function serialize(t, indent)
+    indent = indent or ""
+    local inner = indent .. "  "
+    local parts = {}
+    for k, v in pairs(t) do
+        local key = '"' .. tostring(k) .. '"'
+        local val
+        if type(v) == "table" then
+            val = serialize(v, inner)
+        elseif type(v) == "string" then
+            val = '"' .. v:gsub('"', '\\"') .. '"'
+        elseif type(v) == "boolean" or type(v) == "number" then
+            val = tostring(v)
+        else
+            val = '"' .. tostring(v) .. '"'
+        end
+        parts[#parts+1] = inner .. key .. ": " .. val
+    end
+    return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
+end
+
+-- Simple deserialize: parse the JSON-like string back
+local function deserialize(s)
+    -- Use Roblox's HttpService JSON decode if available, else manual parse
+    local ok, result = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(s)
+    end)
+    if ok then return result end
+    return nil
+end
+
+local function flashBtn(btn, success)
+    local col = success and Color3.fromRGB(50,200,100) or Color3.fromRGB(200,50,50)
+    TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = col}):Play()
+    task.delay(0.6, function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+    end)
+end
+
+local function SaveConfig()
+    if not writefile then flashBtn(SaveConfigBtn, false); return end
+    local data = game:GetService("HttpService"):JSONEncode(buildConfigTable())
+    local ok = pcall(writefile, CONFIG_FILE, data)
+    flashBtn(SaveConfigBtn, ok)
+    if ok then SaveConfigBtn.Text = "Saved!" end
+    task.delay(1.5, function() SaveConfigBtn.Text = "Save Config" end)
+end
+
+local function applyLoadedConfig(t)
+    if not t then return end
+
+    -- Aimbot
+    if t.Aimbot then
+        local a = t.Aimbot
+        Config.Aimbot.Enabled    = a.Enabled    or false
+        Config.Aimbot.Mode       = a.Mode       or "Hold"
+        Config.Aimbot.Radius     = a.Radius     or 150
+        Config.Aimbot.Smoothness = a.Smoothness or 5
+        Config.Aimbot.Prediction = a.Prediction or 0.12
+        if a.HitboxIndex then
+            HitboxIndex = math.clamp(a.HitboxIndex, 1, #Hitboxes)
+            Config.Aimbot.TargetPart = Hitboxes[HitboxIndex]
+        end
+        if a.KeyName then
+            Config.Aimbot.KeyName = a.KeyName
+            -- Resolve key enum
+            local resolved = Enum.UserInputType[a.KeyName] or Enum.KeyCode[a.KeyName]
+            if resolved then Config.Aimbot.Key = resolved end
+        end
+        AimbotToggle.Text = "Aimbot [" .. (Config.Aimbot.Enabled and "ON" or "OFF") .. "]"
+        AnimateButton(AimbotToggle, Config.Aimbot.Enabled)
+        AimModeBtn.Text  = "Aim Mode: " .. Config.Aimbot.Mode
+        AimbotKeyBtn.Text = "Aim Key: " .. Config.Aimbot.KeyName
+        HitboxToggle.Text = "Hitbox: " .. Config.Aimbot.TargetPart
+        FOVLabel.Text    = "FOV: " .. Config.Aimbot.Radius
+        SmoothLabel.Text = "Smooth: " .. Config.Aimbot.Smoothness
+        PredLabel.Text   = "Predict: " .. math.round(Config.Aimbot.Prediction * 100)
+    end
+
+    -- Toggles
+    Config.SilentAim.Enabled = t.SilentAim or false
+    SilentToggle.Text = "Silent Aim [" .. (Config.SilentAim.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(SilentToggle, Config.SilentAim.Enabled)
+
+    Config.ESP.Enabled = t.ESP or false
+    ESPToggle.Text = "ESP [" .. (Config.ESP.Enabled and "ON" or "OFF") .. "]"
+    AnimateButton(ESPToggle, Config.ESP.Enabled)
+
+    if t.TeamCheck ~= nil then Config.TeamCheck = t.TeamCheck end
+    TeamCheckToggle.Text = "Team Check [" .. (Config.TeamCheck and "ON" or "OFF") .. "]"
+    TweenService:Create(TeamCheckToggle, TweenInfo.new(0.15), {
+        BackgroundColor3 = Config.TeamCheck and Color3.fromRGB(50,200,80) or Color3.fromRGB(200,50,50)
+    }):Play()
+
+    -- Chams
+    if t.Chams then
+        Config.Chams.Enabled = t.Chams.Enabled or false
+        if t.Chams.FillHex then
+            local c = hexToColor3(t.Chams.FillHex)
+            if c then
+                Config.Chams.FillColor = c
+                fillRGB = {R=math.floor(c.R*255), G=math.floor(c.G*255), B=math.floor(c.B*255)}
+                ChamsColorBtn.Text = "Fill: #" .. t.Chams.FillHex
+            end
+        end
+        if t.Chams.OutlineHex then
+            local c = hexToColor3(t.Chams.OutlineHex)
+            if c then
+                Config.Chams.OutlineColor = c
+                outlineRGB = {R=math.floor(c.R*255), G=math.floor(c.G*255), B=math.floor(c.B*255)}
+                ChamsOutlineBtn.Text = "Outline: #" .. t.Chams.OutlineHex
+            end
+        end
+        ChamsToggle.Text = "Chams [" .. (Config.Chams.Enabled and "ON" or "OFF") .. "]"
+        AnimateButton(ChamsToggle, Config.Chams.Enabled)
+        RefreshAllVisuals()
+    end
+
+    -- Fly
+    if t.Fly then
+        Config.Fly.Enabled = t.Fly.Enabled or false
+        Config.Fly.Speed   = t.Fly.Speed   or 60
+        Config.Fly.Mode    = t.Fly.Mode    or "Normal"
+        FlyToggle.Text   = "Fly [" .. (Config.Fly.Enabled and "ON" or "OFF") .. "]"
+        AnimateButton(FlyToggle, Config.Fly.Enabled)
+        FlyModeBtn.Text  = "Fly Mode: " .. Config.Fly.Mode
+        FlySpeedLabel.Text = "Fly Spd: " .. Config.Fly.Speed
+    end
+
+    -- Simple bool features
+    local bools = {
+        {t.Noclip,       Config.Noclip,       NoclipToggle,      "Noclip"},
+        {t.TPAura,       Config.TPAura,        TPAuraToggle,      "TP Aura"},
+        {t.EnemyTPAura,  Config.EnemyTPAura,   EnemyTPToggle,     "Enemy TP Aura"},
+        {t.KnifeAura,    Config.KnifeAura,     KnifeAuraToggle,   "Knife Aura"},
+        {t.InfiniteJump, Config.InfiniteJump,  InfJumpToggle,     "Inf. Jump"},
+        {t.InfiniteAmmo, Config.InfiniteAmmo,  InfAmmoToggle,     "Inf. Ammo"},
+        {t.RapidFire,    Config.RapidFire,     RapidFireToggle,   "Rapid Fire"},
+        {t.MagicBullet,  Config.MagicBullet,   MagicBulletToggle, "Magic Bullet"},
+    }
+    for _, b in ipairs(bools) do
+        if b[1] ~= nil then
+            b[2].Enabled = b[1]
+            b[3].Text = b[4] .. " [" .. (b[1] and "ON" or "OFF") .. "]"
+            AnimateButton(b[3], b[1])
+        end
+    end
+
+    -- Walk speed
+    if t.WalkSpeed then
+        currentSpeed = t.WalkSpeed
+        SpeedLabel.Text = "Speed: " .. currentSpeed
+        local Char = LocalPlayer.Character
+        if Char and Char:FindFirstChild("Humanoid") then
+            Char.Humanoid.WalkSpeed = currentSpeed
+        end
+    end
+
+    -- Menu key
+    if t.MenuKey then
+        local kc = Enum.KeyCode[t.MenuKey]
+        if kc then
+            menuKey = kc
+            MenuKeyBtn.Text  = "Menu Key: " .. t.MenuKey
+            MenuKeyLabel.Text = "[" .. t.MenuKey .. "]"
+        end
+    end
+end
+
+local function LoadConfig()
+    if not readfile or not isfile then flashBtn(LoadConfigBtn, false); return end
+    local ok, data = pcall(readfile, CONFIG_FILE)
+    if not ok or not data or data == "" then flashBtn(LoadConfigBtn, false); return end
+    local t = deserialize(data)
+    if not t then flashBtn(LoadConfigBtn, false); return end
+    applyLoadedConfig(t)
+    flashBtn(LoadConfigBtn, true)
+    LoadConfigBtn.Text = "Loaded!"
+    task.delay(1.5, function() LoadConfigBtn.Text = "Load Config" end)
+end
+
+SaveConfigBtn.MouseButton1Click:Connect(SaveConfig)
+LoadConfigBtn.MouseButton1Click:Connect(LoadConfig)
+
+-- Auto-load on start if config exists
+task.defer(function()
+    if readfile and isfile and pcall(isfile, CONFIG_FILE) and isfile(CONFIG_FILE) then
+        LoadConfig()
+    end
+end)
+
 print("---------------------------")
 print("OG's Tuff script Loaded!")
-print("Press 'P' to toggle menu")
+print("Press 'P' to toggle menu | Menu key is rebindable in-game")
 print("---------------------------")
