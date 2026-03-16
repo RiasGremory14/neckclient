@@ -342,7 +342,9 @@ RunService.RenderStepped:Connect(function(dt)
     -- 2. FOV circle
     FOVCircle.Visible  = Config.Aimbot.Enabled and Config.Aimbot.ShowFOV
     FOVCircle.Radius   = Config.Aimbot.Radius
-    FOVCircle.Position = UserInputService:GetMouseLocation()
+    local mouse = UserInputService:GetMouseLocation()
+    local inset = game:GetService("GuiService"):GetGuiInset()
+    FOVCircle.Position = Vector2.new(mouse.X, mouse.Y - inset.Y)
 
     -- 3. mousemoverel aimbot
     local aimbotActive = (Config.Aimbot.Mode == "Hold") and isAimKeyDown or aimbotToggled
@@ -1014,6 +1016,25 @@ MenuKeyBtn.MouseButton1Click:Connect(function()
     bindingMenuKey = true
     MenuKeyBtn.Text = "Press any key..."
     TweenService:Create(MenuKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180,100,0)}):Play()
+
+    -- Poll for mouse buttons (same as aimbot key system)
+    if bindingMenuKeyConn then bindingMenuKeyConn:Disconnect() end
+    bindingMenuKeyConn = RunService.RenderStepped:Connect(function()
+        if not bindingMenuKey then
+            bindingMenuKeyConn:Disconnect(); bindingMenuKeyConn = nil; return
+        end
+        for _, btn in ipairs(MOUSE_BUTTONS) do
+            if UserInputService:IsMouseButtonPressed(btn) then
+                bindingMenuKey = false
+                menuKey = btn
+                local keyName = MOUSE_NAMES[btn]
+                MenuKeyBtn.Text = "Menu Key: " .. keyName
+                MenuKeyLabel.Text = "[" .. keyName .. "]"
+                TweenService:Create(MenuKeyBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35,35,35)}):Play()
+                bindingMenuKeyConn:Disconnect(); bindingMenuKeyConn = nil; return
+            end
+        end
+    end)
 end)
 
 local MOUSE_BUTTONS = {
@@ -1057,12 +1078,18 @@ AimbotKeyBtn.MouseButton1Click:Connect(function()
 end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
-    -- Menu toggle
+    -- Menu toggle (keyboard)
     if not gpe and input.KeyCode == menuKey then
         MainFrame.Visible = not MainFrame.Visible
         return
     end
-    -- Menu key binding
+    -- Menu toggle (mouse button)
+    if not gpe and typeof(menuKey) == "EnumItem" and menuKey.EnumType == Enum.UserInputType
+    and input.UserInputType == menuKey then
+        MainFrame.Visible = not MainFrame.Visible
+        return
+    end
+    -- Menu key binding (keyboard)
     if bindingMenuKey and input.UserInputType == Enum.UserInputType.Keyboard then
         if input.KeyCode ~= Enum.KeyCode.Unknown then
             bindingMenuKey = false
@@ -1104,11 +1131,25 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 -- Mouse4/5 hold state via polling (InputBegan/Ended doesn't fire for them in Roblox)
+local _lastMenuKeyState = false
 RunService.RenderStepped:Connect(function()
-    if not Config.Aimbot.Enabled or Config.Aimbot.Mode ~= "Hold" then return end
-    if Config.Aimbot.Key == Enum.UserInputType.MouseButton4
-    or Config.Aimbot.Key == Enum.UserInputType.MouseButton5 then
-        isAimKeyDown = UserInputService:IsMouseButtonPressed(Config.Aimbot.Key)
+    -- Aimbot key Mouse4/5 hold
+    if Config.Aimbot.Enabled and Config.Aimbot.Mode == "Hold" then
+        if Config.Aimbot.Key == Enum.UserInputType.MouseButton4
+        or Config.Aimbot.Key == Enum.UserInputType.MouseButton5 then
+            isAimKeyDown = UserInputService:IsMouseButtonPressed(Config.Aimbot.Key)
+        end
+    end
+    -- Menu key Mouse4/5 toggle (detect press edge)
+    if typeof(menuKey) == "EnumItem" and menuKey.EnumType == Enum.UserInputType then
+        if menuKey == Enum.UserInputType.MouseButton4
+        or menuKey == Enum.UserInputType.MouseButton5 then
+            local pressed = UserInputService:IsMouseButtonPressed(menuKey)
+            if pressed and not _lastMenuKeyState then
+                MainFrame.Visible = not MainFrame.Visible
+            end
+            _lastMenuKeyState = pressed
+        end
     end
 end)
 
