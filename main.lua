@@ -27,6 +27,9 @@ local Settings = {
     AimbotKey = Enum.UserInputType.MouseButton2,
     -- Viewmodel FOV
     ViewmodelFOV = 70,
+    -- Movement
+    Noclip = false,
+    InfiniteJump = false,
 }
 
 -- Accent color
@@ -487,7 +490,31 @@ makeToggle(ct, "Aimbot",        "Aimbot",       1)
 makeSlider(ct, "FOV",           "FOV",          10, 600, 2)
 makeSlider(ct, "Smoothness",    "Smoothness",   0.1, 5,  3)
 
--- Show default tab
+-- Misc tab
+local mt = tabs["Misc"]
+makeToggle(mt, "Noclip",         "Noclip",        1)
+makeToggle(mt, "Infinite Jump",  "InfiniteJump",  2)
+
+-- Noclip logic
+RunService.Stepped:Connect(function()
+    if Settings.Noclip and LocalPlayer.Character then
+        for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end
+end)
+
+-- Infinite Jump logic
+UserInputService.JumpRequest:Connect(function()
+    if Settings.InfiniteJump
+        and LocalPlayer.Character
+        and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    then
+        LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end)
 tabs["Visuals"].Visible = true
 tabButtons["Visuals"].BackgroundColor3 = Color3.fromRGB(40,55,20)
 tabButtons["Visuals"].TextColor3 = ACCENT
