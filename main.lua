@@ -24,6 +24,8 @@ local Settings = {
     ViewmodelFOV = 70,
     Noclip = false,
     InfiniteJump = false,
+    Fly = false,
+    FlySpeed = 50,
     NoFlash = true,
     NoSmoke = true,
 }
@@ -389,7 +391,8 @@ makeSlider(ct,"FOV","FOV",10,600,3); makeSlider(ct,"Smoothness","Smoothness",0.1
 
 local mt = tabs["Misc"]
 makeToggle(mt,"Noclip","Noclip",1); makeToggle(mt,"Infinite Jump","InfiniteJump",2)
-makeToggle(mt,"No Flash","NoFlash",3); makeToggle(mt,"No Smoke","NoSmoke",4)
+makeToggle(mt,"Fly","Fly",3); makeSlider(mt,"Fly Speed","FlySpeed",10,200,4)
+makeToggle(mt,"No Flash","NoFlash",5); makeToggle(mt,"No Smoke","NoSmoke",6)
 
 tabs["Visuals"].Visible = true
 tabButtons["Visuals"].BackgroundColor3 = Color3.fromRGB(40,55,20)
@@ -428,6 +431,71 @@ UserInputService.JumpRequest:Connect(function()
         local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
+end)
+
+-- Fly
+local flyBV, flyBG
+
+local function enableFly()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.PlatformStand = true end
+
+    flyBV = Instance.new("BodyVelocity", hrp)
+    flyBV.Velocity = Vector3.zero
+    flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+
+    flyBG = Instance.new("BodyGyro", hrp)
+    flyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+    flyBG.D = 100
+    flyBG.CFrame = hrp.CFrame
+end
+
+local function disableFly()
+    if flyBV then flyBV:Destroy(); flyBV = nil end
+    if flyBG then flyBG:Destroy(); flyBG = nil end
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end
+end
+
+-- Toggle fly on setting change
+local lastFly = false
+RunService.Heartbeat:Connect(function()
+    if Settings.Fly ~= lastFly then
+        lastFly = Settings.Fly
+        if Settings.Fly then enableFly() else disableFly() end
+    end
+
+    if not Settings.Fly or not flyBV or not flyBG then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local cf = Camera.CFrame
+    local dir = Vector3.zero
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0,1,0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+
+    flyBV.Velocity = dir.Magnitude > 0 and dir.Unit * Settings.FlySpeed or Vector3.zero
+    flyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + cf.LookVector)
+end)
+
+-- Re-enable fly on respawn
+LocalPlayer.CharacterAdded:Connect(function()
+    flyBV = nil; flyBG = nil
+    task.wait(1)
+    if Settings.Fly then enableFly() end
 end)
 
 -- No Flash: event-based only, no per-frame scan
