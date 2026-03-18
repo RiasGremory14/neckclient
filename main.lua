@@ -30,6 +30,9 @@ local Settings = {
     -- Movement
     Noclip = false,
     InfiniteJump = false,
+    -- Visuals removal
+    NoFlash = true,
+    NoSmoke = true,
 }
 
 -- Accent color
@@ -180,13 +183,15 @@ local function createESP(player)
     healthFill.Parent = healthBG
     espObjects[player].healthFill = healthFill
 
-    -- Chams (SelectionBox)
-    local chams = Instance.new("SelectionBox")
+    -- Chams (Highlight)
+    local chams = Instance.new("Highlight")
     chams.Name = "Chams"
-    chams.LineThickness = 0.05
-    chams.SurfaceTransparency = 1 - Settings.ChamsAlpha
-    chams.Color3 = Settings.ChamsVisibleColor
-    chams.SurfaceColor3 = Settings.ChamsVisibleColor
+    chams.FillColor = Settings.ChamsVisibleColor
+    chams.OutlineColor = Settings.ChamsVisibleColor
+    chams.FillTransparency = 1 - Settings.ChamsAlpha
+    chams.OutlineTransparency = 0
+    chams.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    chams.Enabled = false
     chams.Parent = container
     espObjects[player].chams = chams
 end
@@ -199,8 +204,10 @@ local function updateESP(player)
 
     local char = player.Character
     if not char or not isAlive(player) then
-        for _, obj in pairs(objs) do obj.Visible = false end
-        if objs.chams then objs.chams.Adornee = nil end
+        for _, obj in pairs(objs) do
+            if obj:IsA("GuiObject") then obj.Visible = false
+            elseif obj:IsA("Highlight") then obj.Enabled = false end
+        end
         return
     end
 
@@ -266,13 +273,14 @@ local function updateESP(player)
 
     -- Chams
     if objs.chams then
-        objs.chams.Visible = Settings.Chams
+        objs.chams.Enabled = Settings.Chams
         if Settings.Chams then
-            objs.chams.Adornee = hrp
+            objs.chams.Adornee = char
+            local occluded = isOccluded(char)
             local col = occluded and Settings.ChamsOccludedColor or Settings.ChamsVisibleColor
-            objs.chams.Color3 = col
-            objs.chams.SurfaceColor3 = col
-            objs.chams.SurfaceTransparency = occluded and (1 - Settings.ChamsAlpha * 0.5) or (1 - Settings.ChamsAlpha)
+            objs.chams.FillColor = col
+            objs.chams.OutlineColor = col
+            objs.chams.FillTransparency = occluded and (1 - Settings.ChamsAlpha * 0.5) or (1 - Settings.ChamsAlpha)
         else
             objs.chams.Adornee = nil
         end
@@ -494,6 +502,8 @@ makeSlider(ct, "Smoothness",    "Smoothness",   0.1, 5,  3)
 local mt = tabs["Misc"]
 makeToggle(mt, "Noclip",         "Noclip",        1)
 makeToggle(mt, "Infinite Jump",  "InfiniteJump",  2)
+makeToggle(mt, "No Flash",       "NoFlash",       3)
+makeToggle(mt, "No Smoke",       "NoSmoke",       4)
 
 -- Noclip logic
 RunService.Stepped:Connect(function()
@@ -515,6 +525,90 @@ UserInputService.JumpRequest:Connect(function()
         LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState(Enum.HumanoidStateType.Jumping)
     end
 end)
+
+-- No Flash: Lighting'deki ColorCorrection/Bloom/Blur efektlerini sıfırla
+local Lighting = game:GetService("Lighting")
+
+local function removeFlashEffects()
+    for _, effect in ipairs(Lighting:GetChildren()) do
+        if effect:IsA("ColorCorrectionEffect") and Settings.NoFlash then
+            effect.Brightness = 0
+            effect.Contrast = 0
+            effect.Saturation = 0
+            effect.TintColor = Color3.new(1,1,1)
+        end
+        if effect:IsA("BlurEffect") and Settings.NoFlash then
+            effect.Size = 0
+        end
+    end
+end
+
+Lighting.ChildAdded:Connect(function(child)
+    task.wait()
+    if Settings.NoFlash then
+        if child:IsA("ColorCorrectionEffect") then
+            child.Brightness = 0
+            child.Contrast = 0
+            child.Saturation = 0
+            child.TintColor = Color3.new(1,1,1)
+        elseif child:IsA("BlurEffect") then
+            child.Size = 0
+        end
+    end
+end)
+
+-- No Smoke: workspace'e eklenen smoke/fire/spark part'larını kaldır
+local smokeKeywords = {"smoke", "flash", "grenade", "nade", "smk"}
+
+local function isSmokeObject(obj)
+    if not Settings.NoSmoke then return false end
+    local name = obj.Name:lower()
+    for _, kw in ipairs(smokeKeywords) do
+        if name:find(kw) then return true end
+    end
+    -- Smoke/Fire instance içeriyorsa
+    if obj:IsA("BasePart") then
+        for _, child in ipairs(obj:GetChildren()) do
+            if child:IsA("Smoke") or child:IsA("Fire") or child:IsA("ParticleEmitter") then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function handleSmokeObj(obj)
+    if isSmokeObject(obj) then
+        -- Particle'ları kapat, görünürlüğü sıfırla
+        for _, child in ipairs(obj:GetDescendants()) do
+            if child:IsA("Smoke") then
+                child.Opacity = 0
+                child.Enabled = false
+            elseif child:IsA("ParticleEmitter") then
+                child.Enabled = false
+                child.Transparency = NumberSequence.new(1)
+            elseif child:IsA("Fire") then
+                child.Enabled = false
+            end
+        end
+        if obj:IsA("BasePart") then
+            obj.Transparency = 1
+            obj.CastShadow = false
+        end
+    end
+end
+
+workspace.DescendantAdded:Connect(function(obj)
+    task.wait()
+    handleSmokeObj(obj)
+end)
+
+-- scan existing
+for _, obj in ipairs(workspace:GetDescendants()) do
+    handleSmokeObj(obj)
+end
+removeFlashEffects()
+
 tabs["Visuals"].Visible = true
 tabButtons["Visuals"].BackgroundColor3 = Color3.fromRGB(40,55,20)
 tabButtons["Visuals"].TextColor3 = ACCENT
