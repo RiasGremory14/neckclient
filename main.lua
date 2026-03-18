@@ -24,6 +24,7 @@ local Settings = {
     Aimbot = true,
     Smoothness = 1,
     FOV = 150,
+    ShowFOV = true,
     AimbotKey = Enum.UserInputType.MouseButton2,
     -- Viewmodel FOV
     ViewmodelFOV = 70,
@@ -494,9 +495,10 @@ makeSlider(vt, "Viewmodel FOV","ViewmodelFOV", 60, 120,  8)
 
 -- Combat tab
 local ct = tabs["Combat"]
-makeToggle(ct, "Aimbot",        "Aimbot",       1)
-makeSlider(ct, "FOV",           "FOV",          10, 600, 2)
-makeSlider(ct, "Smoothness",    "Smoothness",   0.1, 5,  3)
+makeToggle(ct, "Aimbot",         "Aimbot",       1)
+makeToggle(ct, "Show FOV",       "ShowFOV",      2)
+makeSlider(ct, "FOV",            "FOV",          10, 600, 3)
+makeSlider(ct, "Smoothness",     "Smoothness",   0.1, 5,  4)
 
 -- Misc tab
 local mt = tabs["Misc"]
@@ -526,35 +528,85 @@ UserInputService.JumpRequest:Connect(function()
     end
 end)
 
--- No Flash: Lighting'deki ColorCorrection/Bloom/Blur efektlerini sıfırla
+-- No Flash: hem Lighting efektlerini hem de ScreenGui flash frame'lerini engelle
 local Lighting = game:GetService("Lighting")
 
-local function removeFlashEffects()
+local function clearLightingEffects()
     for _, effect in ipairs(Lighting:GetChildren()) do
-        if effect:IsA("ColorCorrectionEffect") and Settings.NoFlash then
-            effect.Brightness = 0
-            effect.Contrast = 0
-            effect.Saturation = 0
-            effect.TintColor = Color3.new(1,1,1)
-        end
-        if effect:IsA("BlurEffect") and Settings.NoFlash then
-            effect.Size = 0
+        if Settings.NoFlash then
+            if effect:IsA("ColorCorrectionEffect") then
+                effect.Brightness = 0
+                effect.Contrast = 0
+                effect.Saturation = 0
+                effect.TintColor = Color3.new(1,1,1)
+            elseif effect:IsA("BlurEffect") then
+                effect.Size = 0
+            elseif effect:IsA("SunRaysEffect") then
+                effect.Intensity = 0
+            end
         end
     end
 end
 
 Lighting.ChildAdded:Connect(function(child)
     task.wait()
-    if Settings.NoFlash then
-        if child:IsA("ColorCorrectionEffect") then
-            child.Brightness = 0
-            child.Contrast = 0
-            child.Saturation = 0
-            child.TintColor = Color3.new(1,1,1)
-        elseif child:IsA("BlurEffect") then
-            child.Size = 0
+    if not Settings.NoFlash then return end
+    if child:IsA("ColorCorrectionEffect") then
+        child.Brightness = 0; child.Contrast = 0
+        child.Saturation = 0; child.TintColor = Color3.new(1,1,1)
+    elseif child:IsA("BlurEffect") then
+        child.Size = 0
+    end
+end)
+
+-- Flash frame detector: PlayerGui/CoreGui içindeki beyaz/sarı tam ekran frame'leri yakala
+local function isFlashFrame(obj)
+    if not obj:IsA("Frame") and not obj:IsA("ImageLabel") then return false end
+    local size = obj.Size
+    -- tam ekran veya büyük boyutlu
+    if size.X.Scale >= 0.8 and size.Y.Scale >= 0.8 then
+        local c = obj.BackgroundColor3
+        local brightness = (c.R + c.G + c.B) / 3
+        -- beyaz, sarı veya açık renk flash
+        if brightness > 0.6 and obj.BackgroundTransparency < 0.6 then
+            return true
         end
     end
+    return false
+end
+
+local function hookFlashFrame(obj)
+    if not Settings.NoFlash then return end
+    if isFlashFrame(obj) then
+        obj.BackgroundTransparency = 1
+        obj.Visible = false
+    end
+    -- ImageLabel için
+    if obj:IsA("ImageLabel") and obj.Size.X.Scale >= 0.8 then
+        obj.ImageTransparency = 1
+    end
+end
+
+-- PlayerGui'yi izle
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+playerGui.DescendantAdded:Connect(function(obj)
+    task.wait()
+    hookFlashFrame(obj)
+end)
+for _, obj in ipairs(playerGui:GetDescendants()) do
+    hookFlashFrame(obj)
+end
+
+-- RenderStepped'de sürekli kontrol (bazı flash'lar transparency'yi reset'ler)
+RunService.RenderStepped:Connect(function()
+    if not Settings.NoFlash then return end
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if isFlashFrame(obj) then
+            obj.BackgroundTransparency = 1
+            obj.Visible = false
+        end
+    end
+    clearLightingEffects()
 end)
 
 -- No Smoke: workspace'e eklenen smoke/fire/spark part'larını kaldır
@@ -607,7 +659,6 @@ end)
 for _, obj in ipairs(workspace:GetDescendants()) do
     handleSmokeObj(obj)
 end
-removeFlashEffects()
 
 tabs["Visuals"].Visible = true
 tabButtons["Visuals"].BackgroundColor3 = Color3.fromRGB(40,55,20)
@@ -653,7 +704,7 @@ RunService.RenderStepped:Connect(function()
     end
 
     -- FOV Circle
-    fovCircle.Visible = Settings.Aimbot
+    fovCircle.Visible = Settings.Aimbot and Settings.ShowFOV
     fovCircle.Radius = Settings.FOV
     fovCircle.Position = UserInputService:GetMouseLocation()
 
