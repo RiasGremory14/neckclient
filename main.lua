@@ -22,7 +22,7 @@ local Settings = {
     ShowFOV = true,
     AimbotKey = Enum.UserInputType.MouseButton2,
     ViewmodelFOV = 70,
-    Noclip = false,
+    MenuKey = Enum.KeyCode.Insert,
     InfiniteJump = false,
     Fly = false,
     FlySpeed = 50,
@@ -394,12 +394,75 @@ makeToggle(mt,"Noclip","Noclip",1); makeToggle(mt,"Infinite Jump","InfiniteJump"
 makeToggle(mt,"Fly","Fly",3); makeSlider(mt,"Fly Speed","FlySpeed",10,200,4)
 makeToggle(mt,"No Flash","NoFlash",5); makeToggle(mt,"No Smoke","NoSmoke",6)
 
+-- Menu Keybind picker
+do
+    local keyList = {
+        Enum.KeyCode.Insert, Enum.KeyCode.Delete, Enum.KeyCode.Home, Enum.KeyCode.End,
+        Enum.KeyCode.F1, Enum.KeyCode.F2, Enum.KeyCode.F3, Enum.KeyCode.F4,
+        Enum.KeyCode.F5, Enum.KeyCode.F6, Enum.KeyCode.F7, Enum.KeyCode.F8,
+        Enum.KeyCode.F9, Enum.KeyCode.F10, Enum.KeyCode.F11, Enum.KeyCode.F12,
+        Enum.KeyCode.RightBracket, Enum.KeyCode.LeftBracket,
+        Enum.KeyCode.Backslash, Enum.KeyCode.Semicolon, Enum.KeyCode.Quote,
+        Enum.KeyCode.Comma, Enum.KeyCode.Period, Enum.KeyCode.Slash,
+        Enum.KeyCode.Backquote, Enum.KeyCode.Minus, Enum.KeyCode.Equals,
+        Enum.KeyCode.KeypadZero, Enum.KeyCode.KeypadOne, Enum.KeyCode.KeypadTwo,
+        Enum.KeyCode.KeypadThree, Enum.KeyCode.KeypadFour, Enum.KeyCode.KeypadFive,
+        Enum.KeyCode.KeypadSix, Enum.KeyCode.KeypadSeven, Enum.KeyCode.KeypadEight,
+        Enum.KeyCode.KeypadNine,
+    }
+
+    local row = Instance.new("Frame", mt)
+    row.Size = UDim2.new(1,-10,0,50); row.BackgroundTransparency = 1; row.LayoutOrder = 7
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(1,0,0,16); lbl.BackgroundTransparency = 1
+    lbl.Text = "Menu Key: " .. tostring(Settings.MenuKey.Name)
+    lbl.TextColor3 = Color3.new(1,1,1); lbl.TextSize = 13; lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local bindBtn = Instance.new("TextButton", row)
+    bindBtn.Size = UDim2.new(1,0,0,26); bindBtn.Position = UDim2.new(0,0,0,20)
+    bindBtn.BackgroundColor3 = Color3.fromRGB(35,35,35); bindBtn.BorderSizePixel = 0
+    bindBtn.Text = "Press to bind..."
+    bindBtn.TextColor3 = Color3.fromRGB(180,180,180)
+    bindBtn.TextSize = 12; bindBtn.Font = Enum.Font.Gotham
+    Instance.new("UICorner", bindBtn).CornerRadius = UDim.new(0,4)
+
+    local binding = false
+
+    bindBtn.MouseButton1Click:Connect(function()
+        if binding then return end
+        binding = true
+        bindBtn.Text = "[ Press any key ]"
+        bindBtn.TextColor3 = ACCENT
+
+        local conn
+        conn = UserInputService.InputBegan:Connect(function(input, gpe)
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+            -- ignore modifier-only keys
+            local ignore = {
+                Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift,
+                Enum.KeyCode.LeftControl, Enum.KeyCode.RightControl,
+                Enum.KeyCode.LeftAlt, Enum.KeyCode.RightAlt,
+            }
+            for _, k in ipairs(ignore) do if input.KeyCode == k then return end end
+
+            Settings.MenuKey = input.KeyCode
+            lbl.Text = "Menu Key: " .. input.KeyCode.Name
+            bindBtn.Text = input.KeyCode.Name
+            bindBtn.TextColor3 = Color3.fromRGB(180,180,180)
+            binding = false
+            conn:Disconnect()
+        end)
+    end)
+end
+
 tabs["Visuals"].Visible = true
 tabButtons["Visuals"].BackgroundColor3 = Color3.fromRGB(40,55,20)
 tabButtons["Visuals"].TextColor3 = ACCENT
 
 UserInputService.InputBegan:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.Insert then
+    if input.KeyCode == Settings.MenuKey then
         mainFrame.Visible = not mainFrame.Visible
     end
 end)
