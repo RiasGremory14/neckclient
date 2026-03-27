@@ -34,46 +34,63 @@ local ACCENT = Color3.fromRGB(150, 200, 60)
 
 -- Utility
 local function isAlive(player)
-    return player.Character
-        and player.Character:FindFirstChild("Humanoid")
-        and player.Character.Humanoid.Health > 0
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChildWhichIsA("Humanoid")
+        or char:FindFirstChild("Humanoid")
+    return hum and hum.Health > 0
 end
 
-local function worldToViewport(pos)
-    local s, on = Camera:WorldToViewportPoint(pos)
-    return Vector2.new(s.X, s.Y), on, s.Z
+-- Rivals'da head part farklı isimde olabilir, en iyi parçayı bul
+local function getHeadPart(char)
+    return char:FindFirstChild("HeadHB")
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+        or char:FindFirstChildWhichIsA("BasePart")
 end
-
--- Occluded check throttled per player (not every frame)
-local occludeCache = {}
-local occludeTick = {}
-local OCCLUDE_INTERVAL = 0.1
 
 local function isOccluded(character)
     local now = tick()
     if occludeTick[character] and (now - occludeTick[character]) < OCCLUDE_INTERVAL then
         return occludeCache[character]
     end
-    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local hrp = getHRP(character)
     if not hrp then return true end
     local origin = Camera.CFrame.Position
-    local ray = Ray.new(origin, hrp.Position - origin)
-    local hit = workspace:FindPartOnRayWithIgnoreList(ray, {character, LocalPlayer.Character})
-    occludeCache[character] = hit ~= nil
+    local ok, hit = pcall(function()
+        local ray = Ray.new(origin, hrp.Position - origin)
+        return workspace:FindPartOnRayWithIgnoreList(ray, {character, LocalPlayer.Character})
+    end)
+    occludeCache[character] = ok and hit ~= nil or false
     occludeTick[character] = now
     return occludeCache[character]
-end
+endOccluded check throttled per player (not every frame)
+local occludeCache = {}
+local occludeTick = {}
+local OCCLUDE_INTERVAL = 0.1
 
--- FOV Circle
-local fovCircle = Drawing.new("Circle")
-fovCircle.Thickness = 2
-fovCircle.Filled = false
-fovCircle.Color = ACCENT
-fovCircle.Transparency = 0.6
-
+local function isOccluded(character)
+    local now = tick()
 -- Aimbot
 local function getAimbotTarget()
     local mouse = UserInputService:GetMouseLocation()
+    local best, bestDist = nil, Settings.FOV
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character and isAlive(p) then
+            local part = getHeadPart(p.Character)
+            if part then
+                local ok, pos, on = pcall(function()
+                    return Camera:WorldToViewportPoint(part.Position)
+                end)
+                if ok and on then
+                    local d = (Vector2.new(pos.X, pos.Y) - mouse).Magnitude
+                    if d < bestDist then bestDist = d; best = part end
+                end
+            end
+        end
+    end
+    return best
+end local mouse = UserInputService:GetMouseLocation()
     local best, bestDist = nil, Settings.FOV
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character
@@ -116,12 +133,12 @@ local function removeESP(player)
     occludeTick[player.Character] = nil
 end
 
-local function createESP(player)
+local function createESP(player) 
     if player == LocalPlayer then return end
     removeESP(player)
     local c = Instance.new("Folder", DrawingFolder)
     local t = {}
-
+a
     local nameLabel = Instance.new("TextLabel", c)
     nameLabel.BackgroundTransparency = 1
     nameLabel.TextColor3 = Color3.new(1,1,1)
@@ -171,13 +188,14 @@ local function createESP(player)
     chams.Enabled = false
     t.chams = chams
 
-    espObjects[player] = t
-end
-
-local function updateESP(player)
+    local hrp = getHRP(char)
+    local head = getHeadPart(char)
+    local humanoid = char:FindFirstChildWhichIsA("Humanoid") or char:FindFirstChild("Humanoid")
+    if not hrp then return end
     local objs = espObjects[player]
-    if not objs then return end
-
+    local headPos = head and head.Position or hrp.Position + Vector3.new(0, 2, 0)
+    local topPos, topOn = worldToViewport(headPos + Vector3.new(0, 0.7, 0))
+    local botPos, botOn = worldToViewport(hrp.Position - Vector3.new(0, 3, 0))
     local char = player.Character
     if not char or not isAlive(player) then
         if objs.nameLabel then objs.nameLabel.Visible = false end
@@ -484,10 +502,10 @@ RunService.Stepped:Connect(function()
     if Settings.Noclip then
         for _, p in ipairs(noclipParts) do
             if p and p.Parent then p.CanCollide = false end
-        end
-    end
-end)
-
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.PlatformStand = true end
 -- Infinite Jump
 UserInputService.JumpRequest:Connect(function()
     if Settings.InfiniteJump and LocalPlayer.Character then
@@ -517,11 +535,11 @@ local function enableFly()
     flyBG.CFrame = hrp.CFrame
 end
 
-local function disableFly()
-    if flyBV then flyBV:Destroy(); flyBV = nil end
-    if flyBG then flyBG:Destroy(); flyBG = nil end
+    if not Settings.Fly or not flyBV or not flyBG then return end
     local char = LocalPlayer.Character
-    if char then
+    if not char then return end
+    local hrp = getHRP(char)
+    if not hrp then return end
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.PlatformStand = false end
     end
